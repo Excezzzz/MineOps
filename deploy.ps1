@@ -2,7 +2,7 @@
 # Usage: .\deploy.ps1 user@host     e.g. .\deploy.ps1 admin@144.31.73.85
 #
 # Workflow: git init -> gh push (collision-free name) -> ssh mkdir -> scp files
-#   -> ssh "cd ~/MineOps && docker-compose down && docker-compose up -d --build"
+#   -> ssh rebuild (auto-detects docker compose v2 / docker-compose v1)
 
 [CmdletBinding()]
 param(
@@ -110,5 +110,18 @@ else {
 
 # 5. rebuild
 Write-Step 'Step 5/5: Rebuilding containers'
-ssh -o StrictHostKeyChecking=accept-new $Target 'cd ~/MineOps && docker-compose down && docker-compose up -d --build'
+$RemoteCmd = @'
+cd ~/MineOps
+if docker compose version >/dev/null 2>&1; then
+    CMD="docker compose"
+elif command -v docker-compose >/dev/null 2>&1; then
+    CMD="docker-compose"
+else
+    echo "[MineOps] error: neither docker compose nor docker-compose is installed" >&2
+    exit 1
+fi
+$CMD down && $CMD up -d --build
+'@
+$RemoteCmd = $RemoteCmd -replace "`r?`n", "`n"
+ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 $Target $RemoteCmd
 exit $LASTEXITCODE

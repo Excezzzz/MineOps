@@ -3,7 +3,7 @@
 # Usage: ./deploy.sh user@host     e.g. ./deploy.sh admin@144.31.73.85
 #
 # Workflow: git init -> gh push (collision-free name) -> ssh mkdir -> scp files
-#   -> ssh "cd ~/MineOps && docker-compose down && docker-compose up -d --build"
+#   -> ssh rebuild (auto-detects docker compose v2 / docker-compose v1)
 set -euo pipefail
 
 REPO_PREFIX="${REPO_PREFIX:-MineOps}"
@@ -88,6 +88,17 @@ fi
 
 # 5. rebuild
 log "rebuilding containers"
-ssh "${SSH_OPTS[@]}" "$TARGET" "cd ~/MineOps && docker-compose down && docker-compose up -d --build"
+ssh "${SSH_OPTS[@]}" "$TARGET" '
+cd ~/MineOps
+if docker compose version >/dev/null 2>&1; then
+    CMD="docker compose"
+elif command -v docker-compose >/dev/null 2>&1; then
+    CMD="docker-compose"
+else
+    echo "[MineOps] error: neither docker compose nor docker-compose is installed" >&2
+    exit 1
+fi
+$CMD down && $CMD up -d --build
+'
 
-log "done. Logs: ssh $TARGET 'cd ~/MineOps && docker-compose logs -f'"
+log "done. Logs: ssh $TARGET 'cd ~/MineOps && docker compose logs -f'"
