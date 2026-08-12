@@ -11,8 +11,9 @@ DB_PATH = os.getenv("DB_PATH", "data/bot_data.db")
 
 
 class Database:
-    def __init__(self, db_path: str = DB_PATH) -> None:
+    def __init__(self, db_path: str = DB_PATH, owner_id: int = 0) -> None:
         self.db_path = db_path
+        self.owner_id = int(owner_id or 0)
         self._conn: Optional[aiosqlite.Connection] = None
 
     @property
@@ -97,6 +98,9 @@ class Database:
         return self._row(await cur.fetchone())
 
     async def has_access(self, chat_id: int, user_id: int) -> bool:
+        # The owner can NEVER lose access.
+        if user_id == self.owner_id:
+            return True
         row = await self.get_user(chat_id, user_id)
         return bool(row and row["has_access"])
 
@@ -109,6 +113,18 @@ class Database:
         return [dict(r) for r in await cur.fetchall()]
 
     async def set_access(self, chat_id: int, user_id: int, has_access: bool) -> None:
+        # The owner's access is permanent: revoking it is a no-op, and the
+        # owner always has a row with has_access = 1 so they appear in lists.
+        if user_id == self.owner_id:
+            if not has_access:
+                return
+            await self.conn.execute(
+                "INSERT INTO users (chat_id, user_id, has_access) VALUES (?, ?, 1) "
+                "ON CONFLICT(chat_id, user_id) DO UPDATE SET has_access = 1",
+                (chat_id, user_id),
+            )
+            await self.conn.commit()
+            return
         await self.conn.execute(
             "UPDATE users SET has_access = ? WHERE chat_id = ? AND user_id = ?",
             (1 if has_access else 0, chat_id, user_id),
@@ -116,6 +132,8 @@ class Database:
         await self.conn.commit()
 
     async def revoke_all_except_owner(self, owner_id: int) -> int:
+        # Emergency revoke: explicitly excludes the owner, so the owner can
+        # never be locked out, even if own access was somehow set.
         cur = await self.conn.execute(
             "UPDATE users SET has_access = 0 WHERE user_id != ? AND has_access = 1",
             (owner_id,),

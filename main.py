@@ -13,7 +13,15 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest, TelegramNotFound
 from aiogram.filters import Command, CommandObject, CommandStart
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import (
+    BotCommand,
+    BotCommandScopeAllChats,
+    BotCommandScopeAllGroupChats,
+    BotCommandScopeAllPrivateChats,
+    BotCommandScopeDefault,
+    CallbackQuery,
+    Message,
+)
 from dotenv import load_dotenv
 from html import escape as quote_html
 
@@ -53,7 +61,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 OWNER_ID = int(os.getenv("OWNER_ID", "0") or 0)
 UPDATE_SECONDS = max(5.0, float(os.getenv("DASHBOARD_UPDATE_SECONDS", "15")))
 
-db = Database()
+db = Database(owner_id=OWNER_ID)
 bot: Optional[Bot] = None
 aternos: Optional[AternosService] = None
 _tasks: List[asyncio.Task] = []
@@ -91,6 +99,12 @@ def render_server_status(info: ServerInfo) -> str:
             f"🧱 <b>Version:</b> {quote_html(info.version) or 'unknown'}\n"
             f"⚡ <b>Latency:</b> {info.latency_ms:.0f} ms\n"
         )
+    if info.state == "starting":
+        return (
+            "🟠 <b>Server Status:</b> Starting…\n"
+            f"🌐 <b>IP:</b> {addr}\n"
+            "⏳ The server is booting up, this can take a few minutes.\n"
+        )
     return (
         "🔴 <b>Server Status:</b> Offline\n"
         f"🌐 <b>IP:</b> {addr}\n"
@@ -102,6 +116,8 @@ def render_server_status(info: ServerInfo) -> str:
 def render_user_card(user: dict) -> str:
     name = quote_html(user["username"] or user["first_name"] or str(user["user_id"]))
     state = "🟢 Has access" if user["has_access"] else "🔴 No access"
+    if user["user_id"] == OWNER_ID:
+        state = "👑 <b>Owner - permanent access</b>"
     handle = f"@<b>{quote_html(user['username'])}</b>\n" if user["username"] else ""
     return f"👤 <b>{name}</b>\n🆔 <code>{user['user_id']}</code>\n{handle}🔑 {state}"
 
@@ -182,6 +198,68 @@ async def cmd_setbackup(message: Message, command: CommandObject) -> None:
                          "Applies from the next backup cycle.")
 
 
+@router.message(Command("help"))
+async def cmd_help(message: Message) -> None:
+    await _register_sender(message)
+    if message.from_user is not None and message.from_user.id == OWNER_ID:
+        await message.answer(
+            "🎛 <b>MineOps Owner Help</b>\n\n"
+            "<b>Admin Panel</b> - /start opens the panel. Pick a chat, browse users "
+            "with ◀️/▶️ (5 per page), open a card to <b>Grant</b> or <b>Revoke</b> access. "
+            "The owner's own access is permanent and can never be revoked.\n\n"
+            "<b>Dashboard</b> - a live pinned card keeps you updated; it also starts "
+            "the server with one tap.\n\n"
+            "<b>Server Controls</b> - /run starts, the dashboard panel stops and "
+            "backs up. /setbackup <i>hours</i> changes the auto-backup interval.\n\n"
+            "<b>Emergency Lockdown</b> - /emergency instantly revokes access for ALL "
+            "users except you. Re-grant access later from the panel.\n\n"
+            "<b>Group usage</b> - members can use /run and /status in your group chats."
+        )
+        return
+    if message.chat.type in ("group", "supergroup"):
+        await message.answer(
+            "🛠 <b>MineOps Group Help</b>\n\n"
+            "<b>/run</b> - Start the Minecraft server (needs access granted "
+            "by the owner).\n"
+            "<b>/status</b> - Instantly check the current server status.\n"
+            "<b>/help</b> - Show this help.\n\n"
+            "No access yet? Ask the owner to grant you access from their "
+            "admin panel (/start in private chat)."
+        )
+        return
+    await message.answer(
+        "🤖 <b>MineOps</b> manages a Minecraft server on Aternos.\n\n"
+        "<b>/start</b> - Open the main admin panel\n"
+        "<b>/help</b> - Show help\n"
+        "<b>/emergency</b> - Owner-only lockdown\n\n"
+        "This bot works in private chat with the owner and in group chats "
+        "with /run and /status."
+    )
+
+
+@router.message(Command("status"))
+async def cmd_status(message: Message) -> None:
+    await _register_sender(message)
+    await message.answer(render_server_status(await _aternos().get_status()))
+
+
+@router.message(Command("run"))
+async def cmd_run(message: Message) -> None:
+    await _register_sender(message)
+    user_id = message.from_user.id if message.from_user else 0
+    if not await db.has_access(message.chat.id, user_id):
+        await message.answer(
+            "⛔ <b>Access denied.</b> I can't start the server for you. "
+            "Ask the owner to grant you access from their admin panel."
+        )
+        return
+    try:
+        result = await _aternos().start_server()
+    except AternosError as exc:
+        result = f"❌ {quote_html(str(exc))}"
+    await message.answer(result)
+
+
 # ---------------------------------------------------------------------- #
 # owner admin callbacks
 # ---------------------------------------------------------------------- #
@@ -209,7 +287,7 @@ async def cb_users_page(cb: CallbackQuery) -> None:
     users = await db.list_users(chat_id)
     await cb.message.edit_text(
         f"💬 <b>{title}</b> - {len(users)} user(s)",
-        reply_markup=users_kb(users, chat_id, page=page),
+        reply_markup=users_kb(users, chat_id, page=page, owner_id=OWNER_ID),
     )
     await cb.answer()
 
@@ -226,7 +304,7 @@ async def cb_user_card(cb: CallbackQuery) -> None:
         return
     await cb.message.edit_text(
         render_user_card(user),
-        reply_markup=user_card_kb(chat_id, user_id, bool(user["has_access"])),
+        reply_markup=user_card_kb(chat_id, user_id, bool(user["has_access"]), owner_id=OWNER_ID),
     )
     await cb.answer()
 
@@ -238,11 +316,14 @@ async def cb_set_access(cb: CallbackQuery) -> None:
         return
     grant = cb.data.startswith(f"{ACTION_GRANT}:")
     chat_id, user_id = _parse_ints(cb.data, 2)
+    if user_id == OWNER_ID:
+        await cb.answer("⛔ Owner access is permanent and cannot be changed.", show_alert=True)
+        return
     await db.set_access(chat_id, user_id, grant)
     user = await db.get_user(chat_id, user_id)
     await cb.message.edit_text(
         render_user_card(user) if user else "User row missing.",
-        reply_markup=user_card_kb(chat_id, user_id, grant),
+        reply_markup=user_card_kb(chat_id, user_id, grant, owner_id=OWNER_ID),
     )
     action = "granted" if grant else "revoked"
     await _notify_user_privately(user_id, f"🔐 MineOps: access {action} in chat <code>{chat_id}</code>.")
@@ -421,6 +502,22 @@ async def _on_startup() -> None:
         await db.set_backup_hours(float(os.getenv("DEFAULT_BACKUP_HOURS", "24")))
     _tasks.append(asyncio.create_task(dashboard_loop()))
     _tasks.append(asyncio.create_task(backup_loop()))
+
+    private_commands = [
+        BotCommand(command="start", description="Main Admin Panel"),
+        BotCommand(command="help", description="Help & Command List"),
+        BotCommand(command="emergency", description="Revoke all non-owner access"),
+    ]
+    group_commands = [
+        BotCommand(command="run", description="Start the Minecraft server"),
+        BotCommand(command="status", description="Check current server status"),
+        BotCommand(command="help", description="Show group help"),
+    ]
+    await _bot().set_my_commands(private_commands, scope=BotCommandScopeAllPrivateChats())
+    await _bot().set_my_commands(group_commands, scope=BotCommandScopeAllGroupChats())
+    await _bot().set_my_commands(group_commands, scope=BotCommandScopeAllChats())
+    await _bot().set_my_commands(private_commands, scope=BotCommandScopeDefault())
+
     await _bot().send_message(OWNER_ID, "🚀 <b>MineOps online.</b>")
 
 

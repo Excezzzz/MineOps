@@ -24,6 +24,7 @@ class AternosError(RuntimeError):
 @dataclass
 class ServerInfo:
     online: bool = False
+    state: str = "offline"
     address: str = ""
     port: int = 0
     version: str = ""
@@ -31,6 +32,10 @@ class ServerInfo:
     max_players: int = 0
     latency_ms: float = 0.0
     error: str = ""
+
+
+# python-aternos server.status values that mean "booting up" vs "stopped".
+STATUS_STARTING = {"starting", "start", "restarting", "restart", "loading", "preparing"}
 
 
 class AternosService:
@@ -142,7 +147,102 @@ class AternosService:
 
     async def get_status(self, timeout: float = 8.0) -> ServerInfo:
         # Never raises: offline/unreachable is an expected outcome.
+        #
+        # Truth hierarchy:
+        #   1. python-aternos server.status (online/offline/starting/...)
+        #   2. public mcsrvstat API as fallback + enrichment (handles Aternos
+        #      dynip addresses and dynamic ports)
+        #   3. direct mcstatus probe as last resort
         info = ServerInfo(address=self.server_address, port=self.server_port)
+
+        server = None
+        try:
+            server = await self._get_server()
+        except Exception as exc:
+            logger.debug("aternos status lookup failed: %s", exc)
+        if server is not None:
+            try:
+                await asyncio.to_thread(server.fetch)
+            except Exception as exc:
+                logger.debug("aternos server refresh failed: %s", exc)
+            raw = str(getattr(server, "status", "") or "").strip().lower()
+            if raw:
+                if raw in STATUS_STARTING:
+                    info.state = "starting"
+                elif raw == "online":
+                    info.state = "online"
+                else:
+                    info.state = "offline"
+            elif self._is_running(server):
+                info.state = "starting"
+            if info.state == "online":
+                info.online = True
+            elif info.state == "starting":
+                info.error = "The server is starting up; it can take a few minutes."
+
+        if info.online:
+            data = await self._fetch_status_api(timeout)
+            if data is not None and data.get("online"):
+                self._apply_status_payload(info, data)
+            else:
+                await self._probe_direct(info, timeout)
+            if not info.error:
+                info.error = ""
+            return info
+
+        if server is None:
+            # Aternos panel unreachable: let the public API be the source of truth.
+            data = await self._fetch_status_api(timeout)
+            if data is not None:
+                online = bool(data.get("online"))
+                if online:
+                    self._apply_status_payload(info, data)
+                else:
+                    info.error = "Server is offline."
+                return info
+            await self._probe_direct(info, timeout)
+            if not info.online and not info.error:
+                info.error = "Server is offline."
+            return info
+
+        return info
+
+    async def _fetch_status_api(self, timeout: float = 5.0) -> Optional[dict]:
+        """mcsrvstat public API: resolves Aternos dynip/dynamic ports for us."""
+        try:
+            import aiohttp
+
+            url = f"https://api.mcsrvstat.us/3/{self.server_address}"
+            params = {"port": str(self.server_port)} if self.server_port != 25565 else None
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    url,
+                    params=params,
+                    timeout=aiohttp.ClientTimeout(total=timeout),
+                ) as resp:
+                    if resp.status == 200:
+                        return await resp.json()
+                    logger.debug("mcsrvstat HTTP %s", resp.status)
+        except Exception as exc:
+            logger.debug("mcsrvstat lookup failed: %s", exc)
+        return None
+
+    @staticmethod
+    def _apply_status_payload(info: ServerInfo, data: dict) -> None:
+        info.online = True
+        info.state = "online"
+        info.address = str(data.get("ip") or info.address)
+        info.port = int(data.get("port") or 0) or info.port
+        version = data.get("version") or {}
+        players = data.get("players") or {}
+        info.version = str(version.get("name") or "")
+        info.players = int(players.get("online") or 0)
+        info.max_players = int(players.get("max") or 0)
+        info.latency_ms = round(float(data.get("ping") or 0.0), 1)
+        info.error = ""
+
+    async def _probe_direct(self, info: ServerInfo, timeout: float = 8.0) -> None:
+        """Direct mcstatus ping (works when the port is static and reachable)."""
 
         def _lookup() -> Any:
             if hasattr(MCJavaServer, "lookup"):
@@ -160,11 +260,11 @@ class AternosService:
             players = getattr(status, "players", None)
             version = getattr(status, "version", None)
             info.online = True
+            info.state = "online"
             info.players = int(getattr(players, "online", 0) or 0)
             info.max_players = int(getattr(players, "max", 0) or 0)
             info.version = str(getattr(version, "name", "") or "")
             info.latency_ms = round(float(getattr(status, "latency", 0.0) or 0.0), 1)
+            info.error = ""
         except Exception as exc:
             info.error = str(exc) or exc.__class__.__name__
-
-        return info

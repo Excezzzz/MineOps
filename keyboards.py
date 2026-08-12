@@ -79,13 +79,17 @@ def chats_menu_kb(chats: List[dict], page: int = 0) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def users_kb(users: List[dict], chat_id: int, page: int = 0) -> InlineKeyboardMarkup:
+def users_kb(users: List[dict], chat_id: int, page: int = 0, owner_id: int = 0) -> InlineKeyboardMarkup:
     page = _clamp_page(page, len(users))
     start, end = page * PAGE_SIZE, min((page + 1) * PAGE_SIZE, len(users))
 
     rows: List[List[InlineKeyboardButton]] = [
         [InlineKeyboardButton(
-            text=f"[{'🟢' if u['has_access'] else '🔴'}] {u['username'] or u['first_name'] or u['user_id']}",
+            text=(
+                f"[{'🟢' if u['has_access'] else '🔴'}] "
+                f"{'👑 ' if u['user_id'] == owner_id else ''}"
+                f"{u['username'] or u['first_name'] or u['user_id']}"
+            ),
             callback_data=f"{ACTION_USER_CARD}:{chat_id}:{u['user_id']}",
         )]
         for u in users[start:end]
@@ -99,15 +103,19 @@ def users_kb(users: List[dict], chat_id: int, page: int = 0) -> InlineKeyboardMa
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def user_card_kb(chat_id: int, user_id: int, has_access: bool) -> InlineKeyboardMarkup:
-    action, label = (ACTION_REVOKE, "❌ Revoke Access") if has_access else (ACTION_GRANT, "✅ Grant Access")
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=label, callback_data=f"{action}:{chat_id}:{user_id}")],
-        [
-            InlineKeyboardButton(text="⬅️ Back", callback_data=f"{ACTION_USER_LIST}:{chat_id}:p:0"),
-            InlineKeyboardButton(text="❌ Close", callback_data=ACTION_CLOSE),
-        ],
+def user_card_kb(chat_id: int, user_id: int, has_access: bool, owner_id: int = 0) -> InlineKeyboardMarkup:
+    if user_id == owner_id:
+        rows: List[List[InlineKeyboardButton]] = [
+            [InlineKeyboardButton(text="👑 Owner - permanent access", callback_data=ACTION_NOOP)],
+        ]
+    else:
+        action, label = (ACTION_REVOKE, "❌ Revoke Access") if has_access else (ACTION_GRANT, "✅ Grant Access")
+        rows = [[InlineKeyboardButton(text=label, callback_data=f"{action}:{chat_id}:{user_id}")]]
+    rows.append([
+        InlineKeyboardButton(text="⬅️ Back", callback_data=f"{ACTION_USER_LIST}:{chat_id}:p:0"),
+        InlineKeyboardButton(text="❌ Close", callback_data=ACTION_CLOSE),
     ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def dashboard_kb() -> InlineKeyboardMarkup:
