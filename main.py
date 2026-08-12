@@ -15,7 +15,6 @@ from aiogram.exceptions import TelegramBadRequest, TelegramNotFound
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import (
     BotCommand,
-    BotCommandScopeAllChats,
     BotCommandScopeAllGroupChats,
     BotCommandScopeAllPrivateChats,
     BotCommandScopeDefault,
@@ -515,7 +514,6 @@ async def _on_startup() -> None:
     ]
     await _bot().set_my_commands(private_commands, scope=BotCommandScopeAllPrivateChats())
     await _bot().set_my_commands(group_commands, scope=BotCommandScopeAllGroupChats())
-    await _bot().set_my_commands(group_commands, scope=BotCommandScopeAllChats())
     await _bot().set_my_commands(private_commands, scope=BotCommandScopeDefault())
 
     await _bot().send_message(OWNER_ID, "🚀 <b>MineOps online.</b>")
