@@ -412,7 +412,7 @@ async def _run_server_action(cb: CallbackQuery, verb: str) -> None:
             result = await _aternos().create_backup()
         else:
             result = await _aternos().start_server()
-        await cb.message.answer(result)
+        await cb.message.answer(str(result))
     except AternosError as exc:
         await cb.message.answer(f"❌ {quote_html(str(exc))}")
 

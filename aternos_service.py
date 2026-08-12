@@ -96,7 +96,7 @@ class AternosService:
             return False
 
     async def start_server(self) -> str:
-        async def _do(server: Any) -> str:
+        def _do(server: Any) -> str:
             if self._is_running(server):
                 return "Server is already online or still starting up."
             try:
@@ -123,7 +123,7 @@ class AternosService:
             return "Server stop requested."
 
     async def create_backup(self) -> str:
-        async def _do(server: Any) -> str:
+        def _do(server: Any) -> str:
             create = getattr(getattr(server, "backups", None), "create", None)
             if callable(create):
                 create()
