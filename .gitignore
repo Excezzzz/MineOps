@@ -1,0 +1,25 @@
+# --- secrets ---
+.env
+
+# --- database & runtime data ---
+data/
+bot_data.db
+*.db-wal
+*.db-shm
+
+# --- python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# --- logs ---
+*.log
+
+# --- os / editors ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
