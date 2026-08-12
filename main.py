@@ -115,12 +115,13 @@ def render_server_status(info: ServerInfo) -> str:
     if info.online:
         names = ", ".join(quote_html(n) for n in info.players_list)
         listing = names or "Никого нет"
+        version = quote_html(info.version) or "unknown"
         return (
             "🟢 <b>СЕРВЕР ОНЛАЙН</b>\n"
             f"🌐 <b>IP:</b> {addr}\n"
-            f"👥 <b>Игроки:</b> {info.players} / {info.max_players}\n"
-            f"📜 <b>Список:</b> {listing}\n"
-            f"📦 <b>Версия:</b> {quote_html(info.version) or 'unknown'}\n"
+            f"👥 <b>Игроки:</b> <code>{info.players} / {info.max_players}</code>\n"
+            f"📜 <b>Список:</b> <code>{listing}</code>\n"
+            f"📦 <b>Версия:</b> <code>{version}</code>\n"
         )
     if info.state == "starting":
         return (

@@ -149,11 +149,12 @@ class AternosService:
     async def get_status(self, timeout: float = 8.0) -> ServerInfo:
         # Never raises: offline/unreachable is an expected outcome.
         #
-        # Truth hierarchy:
-        #   1. python-aternos server.status (online/offline/starting/...)
-        #   2. public mcsrvstat API as fallback + enrichment (handles Aternos
-        #      dynip addresses and dynamic ports)
-        #   3. direct mcstatus probe as last resort
+        # Source of truth: the python-aternos server object exposes real-time
+        # data straight from the Aternos web panel - status, player count,
+        # player list, software + version and the domain/port - without any
+        # external socket pings (Aternos blocks external query ports).
+        # External probes (mcsrvstat API, mcstatus socket) are used only as a
+        # fallback when the panel is unreachable or reports no player payload.
         info = ServerInfo(address=self.server_address, port=self.server_port)
 
         server = None
@@ -181,14 +182,32 @@ class AternosService:
             elif info.state == "starting":
                 info.error = "The server is starting up; it can take a few minutes."
 
+            info.players = int(getattr(server, "players_count", 0) or 0)
+            info.max_players = int(
+                getattr(server, "slots", 0)
+                or getattr(server, "max_players", 0)
+                or 0
+            )
+            info.players_list = self._normalize_players(
+                getattr(server, "players_list", None) or []
+            )
+            software = str(getattr(server, "software", "") or "").strip()
+            version = str(getattr(server, "version", "") or "").strip()
+            composed = " ".join(p for p in (software, version) if p).strip()
+            if composed:
+                info.version = composed
+            info.address = str(getattr(server, "domain", "") or info.address)
+            info.port = int(getattr(server, "port", 0) or 0) or info.port
+
         if info.online:
-            data = await self._fetch_status_api(timeout)
-            if data is not None and data.get("online"):
-                self._apply_status_payload(info, data)
-            else:
-                await self._probe_direct(info, timeout)
-            if not info.error:
-                info.error = ""
+            # Panel payload already carries everything (players, slots, list,
+            # version); probe externally only when it is entirely empty.
+            if info.players == 0 and info.max_players == 0 and not info.players_list:
+                data = await self._fetch_status_api(timeout)
+                if data is not None and data.get("online"):
+                    self._apply_status_payload(info, data)
+                else:
+                    await self._probe_direct(info, timeout)
             return info
 
         if server is None:
@@ -207,6 +226,18 @@ class AternosService:
             return info
 
         return info
+
+    @staticmethod
+    def _normalize_players(raw: Any) -> List[str]:
+        names: List[str] = []
+        for entry in raw:
+            if isinstance(entry, dict):
+                name = entry.get("name")
+                if name:
+                    names.append(str(name))
+            elif isinstance(entry, str) and entry.strip():
+                names.append(entry.strip())
+        return names[:10]
 
     async def _fetch_status_api(self, timeout: float = 5.0) -> Optional[dict]:
         """mcsrvstat public API: resolves Aternos dynip/dynamic ports for us."""
