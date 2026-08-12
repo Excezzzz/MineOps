@@ -214,6 +214,7 @@ class AternosService:
                 self._apply_status_payload(info, data)
                 return info
             # mcsrvstat says offline: check the Aternos panel (cached session)
+            logger.info("get_status: api says offline, consulting panel")
             panel = await self._panel_state()
             if panel == "starting":
                 info.state = "starting"
@@ -231,6 +232,7 @@ class AternosService:
             return info
 
         # mcsrvstat unreachable: fall back to the Aternos panel as source of truth.
+        logger.info("get_status: mcsrvstat unreachable, panel fallback")
         server = await self._cached_server_safe()
         if server is not None:
             await self._maybe_refresh_panel(server)
@@ -257,8 +259,10 @@ class AternosService:
         """
         now = time.monotonic()
         if now - self._last_panel_fetch < PANEL_REFRESH_SECONDS:
+            logger.info("panel refresh SKIPPED (%.0fs left)", PANEL_REFRESH_SECONDS - (now - self._last_panel_fetch))
             return
         try:
+            logger.info("panel refresh EXECUTED (last=%.0fs ago)", now - self._last_panel_fetch)
             await asyncio.to_thread(server.fetch)
         except Exception as exc:
             logger.debug("panel refresh failed: %s", exc)
