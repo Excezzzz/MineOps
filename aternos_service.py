@@ -1,6 +1,10 @@
 """MineOps - async wrappers around python-aternos (control) and mcstatus (status).
 
-All blocking library calls run inside asyncio.to_thread. NOTE: python-aternos
+All blocking library calls run inside asyncio.to_thread. The authenticated
+python-aternos Client is cached on self.client and reused for the bot's whole
+lifetime: re-authentication only happens when the cached session expires or
+the client was never created (prevents Cloudflare anti-bot blocks / rate
+limits caused by logging in on every request). NOTE: python-aternos
 (3.0.6, unmaintained) exposes no backup API - create_backup() reports that
 clearly instead of failing silently.
 """
@@ -21,6 +25,10 @@ class AternosError(RuntimeError):
     pass
 
 
+AUTH_ERROR_MSG = ("❌ Ошибка авторизации Aternos: проверьте ATERNOS_USERNAME и "
+                  "ATERNOS_PASSWORD в файле .env")
+
+
 @dataclass
 class ServerInfo:
     online: bool = False
@@ -36,7 +44,7 @@ class ServerInfo:
 
 
 # python-aternos server.status values that mean "booting up" vs "stopped".
-STATUS_STARTING = {"starting", "start", "restarting", "restart", "loading", "preparing"}
+STATUS_STARTING = {"starting", "start", "loading", "preparing", "restarting", "restart"}
 
 
 class AternosService:
@@ -53,38 +61,58 @@ class AternosService:
         self.server_address = server_address
         self.server_port = int(server_port)
         self.session = session
-        self._client: Any = None
+        self.client: Any = None
         self._server: Any = None
         self._login_lock = asyncio.Lock()
         self._op_lock = asyncio.Lock()
 
     def _login_sync(self) -> Any:
+        """Create a cached python-aternos Client (session-first, then credentials)."""
         from python_aternos import Client
+        from python_aternos.aterrors import AternosError as AtAternosError
 
         client = Client()
         if self.session:
-            client.login_with_session(self.session)
-        else:
-            client.login(self.username, self.password)
+            # Reuse the saved session when the client is missing/expired.
+            try:
+                client.login_with_session(self.session)
+                return client
+            except (AtAternosError, Exception) as exc:
+                logger.warning("Aternos session rejected (%s), falling back to credentials", exc)
+        client.login(self.username, self.password)
         return client
 
     async def _get_server(self) -> Any:
         async with self._login_lock:
-            if self._server is None:
+            if self._server is not None and self.client is not None:
+                # Reuse the authenticated session - do NOT re-login on every tick.
+                return self._server
+            client = None
+            try:
                 client = await asyncio.to_thread(self._login_sync)
+            except Exception as exc:
+                from python_aternos.aterrors import CredentialsError
+
+                if isinstance(exc, CredentialsError):
+                    raise AternosError(AUTH_ERROR_MSG) from exc
+                raise AternosError(f"Aternos login failed: {exc}") from exc
+            try:
                 servers = await asyncio.to_thread(client.account.list_servers)
-                if not servers:
-                    raise AternosError("no Aternos servers found on this account")
-                for candidate in servers:
-                    try:
-                        await asyncio.to_thread(candidate.fetch)
-                    except Exception:
-                        continue
-                    if getattr(candidate, "domain", "") == self.server_address:
-                        self._server = candidate
-                        break
-                self._server = self._server or servers[0]
-                self._client = client
+            except Exception as exc:
+                raise AternosError(f"could not load Aternos servers: {exc}") from exc
+            if not servers:
+                raise AternosError("no Aternos servers found on this account")
+            server = None
+            for candidate in servers:
+                try:
+                    await asyncio.to_thread(candidate.fetch)
+                except Exception:
+                    continue
+                if getattr(candidate, "domain", "") == self.server_address:
+                    server = candidate
+                    break
+            self.client = client
+            self._server = server or servers[0]
             return self._server
 
     @staticmethod
@@ -111,6 +139,10 @@ class AternosService:
             try:
                 return await asyncio.to_thread(_do, server)
             except Exception as exc:
+                from python_aternos.aterrors import CredentialsError
+
+                if isinstance(exc, CredentialsError):
+                    raise AternosError(AUTH_ERROR_MSG) from exc
                 raise AternosError(f"start failed: {exc}") from exc
 
     async def stop_server(self) -> str:
@@ -119,6 +151,10 @@ class AternosService:
             try:
                 await asyncio.to_thread(server.stop)
             except Exception as exc:
+                from python_aternos.aterrors import CredentialsError
+
+                if isinstance(exc, CredentialsError):
+                    raise AternosError(AUTH_ERROR_MSG) from exc
                 raise AternosError(f"stop failed: {exc}") from exc
             return "Server stop requested."
 
@@ -135,11 +171,18 @@ class AternosService:
 
         async with self._op_lock:
             server = await self._get_server()
-            return await asyncio.to_thread(_do, server)
+            try:
+                return await asyncio.to_thread(_do, server)
+            except Exception as exc:
+                from python_aternos.aterrors import CredentialsError
+
+                if isinstance(exc, CredentialsError):
+                    raise AternosError(AUTH_ERROR_MSG) from exc
+                raise AternosError(f"backup failed: {exc}") from exc
 
     async def shutdown(self) -> None:
-        if self._client is not None:
-            kill = getattr(self._client, "kill_keep_alives", None)
+        if self.client is not None:
+            kill = getattr(self.client, "kill_keep_alives", None)
             if callable(kill):
                 try:
                     await asyncio.to_thread(kill)
@@ -149,83 +192,99 @@ class AternosService:
     async def get_status(self, timeout: float = 8.0) -> ServerInfo:
         # Never raises: offline/unreachable is an expected outcome.
         #
-        # Source of truth: the python-aternos server object exposes real-time
-        # data straight from the Aternos web panel - status, player count,
-        # player list, software + version and the domain/port - without any
-        # external socket pings (Aternos blocks external query ports).
-        # External probes (mcsrvstat API, mcstatus socket) are used only as a
-        # fallback when the panel is unreachable or reports no player payload.
+        # Hybrid loop: routine updates hit the PUBLIC mcsrvstat API first
+        # (no Aternos panel request => no Cloudflare friction). The cached
+        # python-aternos session is consulted only to distinguish
+        # "offline" from "starting/loading" when mcsrvstat says offline.
         info = ServerInfo(address=self.server_address, port=self.server_port)
 
-        server = None
-        try:
-            server = await self._get_server()
-        except Exception as exc:
-            logger.debug("aternos status lookup failed: %s", exc)
+        data = await self._fetch_status_api(timeout)
+        if data is not None:
+            if data.get("online"):
+                self._apply_status_payload(info, data)
+                return info
+            # mcsrvstat says offline: check the Aternos panel (cached session)
+            panel = await self._panel_state()
+            if panel == "starting":
+                info.state = "starting"
+                info.error = "The server is starting up; it can take a few minutes."
+            elif panel == "online":
+                # Panel disagrees with the API (API cache lag): trust the panel.
+                server = await self._cached_server_safe()
+                if server is not None:
+                    self._apply_server_props(info, server)
+                else:
+                    info.error = "Server is offline."
+            else:
+                info.state = "offline"
+                info.error = "Server is offline." if panel == "offline" else "Server status unknown."
+            return info
+
+        # mcsrvstat unreachable: fall back to the Aternos panel as source of truth.
+        server = await self._cached_server_safe()
         if server is not None:
             try:
                 await asyncio.to_thread(server.fetch)
-            except Exception as exc:
-                logger.debug("aternos server refresh failed: %s", exc)
-            raw = str(getattr(server, "status", "") or "").strip().lower()
-            if raw:
-                if raw in STATUS_STARTING:
-                    info.state = "starting"
-                elif raw == "online":
-                    info.state = "online"
-                else:
-                    info.state = "offline"
-            elif self._is_running(server):
-                info.state = "starting"
-            if info.state == "online":
-                info.online = True
-            elif info.state == "starting":
-                info.error = "The server is starting up; it can take a few minutes."
-
-            info.players = int(getattr(server, "players_count", 0) or 0)
-            info.max_players = int(
-                getattr(server, "slots", 0)
-                or getattr(server, "max_players", 0)
-                or 0
-            )
-            info.players_list = self._normalize_players(
-                getattr(server, "players_list", None) or []
-            )
-            software = str(getattr(server, "software", "") or "").strip()
-            version = str(getattr(server, "version", "") or "").strip()
-            composed = " ".join(p for p in (software, version) if p).strip()
-            if composed:
-                info.version = composed
-            info.address = str(getattr(server, "domain", "") or info.address)
-            info.port = int(getattr(server, "port", 0) or 0) or info.port
-
-        if info.online:
-            # Panel payload already carries everything (players, slots, list,
-            # version); probe externally only when it is entirely empty.
-            if info.players == 0 and info.max_players == 0 and not info.players_list:
-                data = await self._fetch_status_api(timeout)
-                if data is not None and data.get("online"):
-                    self._apply_status_payload(info, data)
-                else:
-                    await self._probe_direct(info, timeout)
+            except Exception:
+                pass
+            self._apply_server_props(info, server)
             return info
-
-        if server is None:
-            # Aternos panel unreachable: let the public API be the source of truth.
-            data = await self._fetch_status_api(timeout)
-            if data is not None:
-                online = bool(data.get("online"))
-                if online:
-                    self._apply_status_payload(info, data)
-                else:
-                    info.error = "Server is offline."
-                return info
-            await self._probe_direct(info, timeout)
-            if not info.online and not info.error:
-                info.error = "Server is offline."
-            return info
-
+        # Panel also unreachable: last-resort direct socket probe.
+        await self._probe_direct(info, timeout)
+        if not info.online and not info.error:
+            info.error = "Server is offline."
         return info
+
+    async def _cached_server_safe(self) -> Optional[Any]:
+        try:
+            return await self._get_server()
+        except AternosError as exc:
+            logger.warning("aternos panel unavailable: %s", exc)
+            return None
+
+    async def _panel_state(self) -> Optional[str]:
+        """Best-effort Aternos state: 'online' / 'starting' / 'offline' / None."""
+        try:
+            server = await self._get_server()
+            await asyncio.to_thread(server.fetch)
+            raw = str(getattr(server, "status", "") or "").strip().lower()
+            if raw in STATUS_STARTING:
+                return "starting"
+            if raw == "online":
+                return "online"
+            return "offline"
+        except Exception as exc:
+            logger.debug("panel state check failed: %s", exc)
+            return None
+
+    def _apply_server_props(self, info: ServerInfo, server: Any) -> None:
+        """Fill ServerInfo straight from the python-aternos web-panel data."""
+        raw = str(getattr(server, "status", "") or "").strip().lower()
+        if raw in STATUS_STARTING:
+            info.state = "starting"
+        elif raw == "online":
+            info.state = "online"
+        else:
+            info.state = "offline"
+        if info.state == "online":
+            info.online = True
+        elif info.state == "starting":
+            info.error = "The server is starting up; it can take a few minutes."
+
+        info.players = int(getattr(server, "players_count", 0) or 0)
+        info.max_players = int(
+            getattr(server, "slots", 0)
+            or getattr(server, "max_players", 0)
+            or 0
+        )
+        info.players_list = self._normalize_players(getattr(server, "players_list", None) or [])
+        software = str(getattr(server, "software", "") or "").strip()
+        version = str(getattr(server, "version", "") or "").strip()
+        composed = " ".join(p for p in (software, version) if p).strip()
+        if composed:
+            info.version = composed
+        info.address = str(getattr(server, "domain", "") or info.address)
+        info.port = int(getattr(server, "port", 0) or 0) or info.port
 
     @staticmethod
     def _normalize_players(raw: Any) -> List[str]:

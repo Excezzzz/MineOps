@@ -59,7 +59,7 @@ logger = logging.getLogger("mineops")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 OWNER_ID = int(os.getenv("OWNER_ID", "0") or 0)
-UPDATE_SECONDS = max(5.0, float(os.getenv("DASHBOARD_UPDATE_SECONDS", "15")))
+UPDATE_SECONDS = max(5.0, float(os.getenv("DASHBOARD_UPDATE_SECONDS", "30")))
 
 db = Database(owner_id=OWNER_ID)
 bot: Optional[Bot] = None
