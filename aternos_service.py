@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import time
 from dataclasses import dataclass, field
 from typing import Any, List, Optional
 
@@ -46,6 +48,13 @@ class ServerInfo:
 # python-aternos server.status values that mean "booting up" vs "stopped".
 STATUS_STARTING = {"starting", "start", "loading", "preparing", "restarting", "restart"}
 
+# How often the Aternos web scraper may be consulted at most (seconds).
+# Live polling runs on the public mcsrvstat API; the python-aternos scrape is
+# throttled so Cloudflare bypass retries do not pile up every loop tick.
+PANEL_REFRESH_SECONDS = max(
+    30.0, float(os.getenv("PANEL_REFRESH_SECONDS", "120") or 120)
+)
+
 
 class AternosService:
     def __init__(
@@ -65,6 +74,7 @@ class AternosService:
         self._server: Any = None
         self._login_lock = asyncio.Lock()
         self._op_lock = asyncio.Lock()
+        self._last_panel_fetch = 0.0
 
     def _login_sync(self) -> Any:
         """Create a cached python-aternos Client (session-first, then credentials)."""
@@ -223,10 +233,7 @@ class AternosService:
         # mcsrvstat unreachable: fall back to the Aternos panel as source of truth.
         server = await self._cached_server_safe()
         if server is not None:
-            try:
-                await asyncio.to_thread(server.fetch)
-            except Exception:
-                pass
+            await self._maybe_refresh_panel(server)
             self._apply_server_props(info, server)
             return info
         # Panel also unreachable: last-resort direct socket probe.
@@ -242,11 +249,27 @@ class AternosService:
             logger.warning("aternos panel unavailable: %s", exc)
             return None
 
+    async def _maybe_refresh_panel(self, server: Any) -> None:
+        """Fetch live panel data at most every PANEL_REFRESH_SECONDS.
+
+        serve() keeps the cached status (last fetch / login result) in between,
+        so the python-aternos scraper is never hammered on every poll tick.
+        """
+        now = time.monotonic()
+        if now - self._last_panel_fetch < PANEL_REFRESH_SECONDS:
+            return
+        try:
+            await asyncio.to_thread(server.fetch)
+        except Exception as exc:
+            logger.debug("panel refresh failed: %s", exc)
+        finally:
+            self._last_panel_fetch = now
+
     async def _panel_state(self) -> Optional[str]:
         """Best-effort Aternos state: 'online' / 'starting' / 'offline' / None."""
         try:
             server = await self._get_server()
-            await asyncio.to_thread(server.fetch)
+            await self._maybe_refresh_panel(server)
             raw = str(getattr(server, "status", "") or "").strip().lower()
             if raw in STATUS_STARTING:
                 return "starting"

@@ -101,8 +101,24 @@ foreach ($File in $Files) {
     if ($LASTEXITCODE -ne 0) { exit 1 }
 }
 if (Test-Path '.env') {
-    scp -o StrictHostKeyChecking=accept-new '.env' "${Target}:~/MineOps/"
-    if ($LASTEXITCODE -ne 0) { exit 1 }
+    # Preserve a working remote .env: never truncate live credentials with
+    # local placeholders. Force-copy with DEPLOY_FORCE_ENV=1 when intended.
+    if ($env:DEPLOY_FORCE_ENV -eq '1') {
+        scp -o StrictHostKeyChecking=accept-new '.env' "${Target}:~/MineOps/"
+        if ($LASTEXITCODE -ne 0) { exit 1 }
+        Write-Step 'copied local .env (DEPLOY_FORCE_ENV=1)'
+    }
+    else {
+        $RemoteHasEnv = ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 $Target "test -f ~/MineOps/.env && echo YES || echo NO"
+        if ($LASTEXITCODE -ne 0) { exit 1 }
+        if ($RemoteHasEnv -notmatch 'YES') {
+            scp -o StrictHostKeyChecking=accept-new '.env' "${Target}:~/MineOps/"
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+        }
+        else {
+            Write-Warn 'remote ~/MineOps/.env already exists - keeping it (set DEPLOY_FORCE_ENV=1 to overwrite)'
+        }
+    }
 }
 else {
     Write-Warn 'no local .env found - create one in ~/MineOps on the server before the first run'

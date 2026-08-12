@@ -81,7 +81,16 @@ ssh "${SSH_OPTS[@]}" "$TARGET" "mkdir -p ~/MineOps" || die "SSH to '$TARGET' fai
 log "transferring files"
 scp "${SSH_OPTS[@]}" "${FILES[@]}" "$TARGET":~/MineOps/
 if [ -f .env ]; then
-    scp "${SSH_OPTS[@]}" .env "$TARGET":~/MineOps/
+    # Preserve a working remote .env: never truncate live credentials with
+    # local placeholders. Force-copy with DEPLOY_FORCE_ENV=1 when intended.
+    if [ "${DEPLOY_FORCE_ENV:-0}" = "1" ]; then
+        scp "${SSH_OPTS[@]}" .env "$TARGET":~/MineOps/
+        log "copied local .env (DEPLOY_FORCE_ENV=1)"
+    elif ssh "${SSH_OPTS[@]}" "$TARGET" "test -f ~/MineOps/.env"; then
+        warn "remote ~/MineOps/.env already exists - keeping it (DEPLOY_FORCE_ENV=1 to overwrite)"
+    else
+        scp "${SSH_OPTS[@]}" .env "$TARGET":~/MineOps/
+    fi
 else
     warn "no local .env - create one in ~/MineOps on the server before the first run"
 fi
