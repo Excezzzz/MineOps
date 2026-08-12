@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 from datetime import datetime, timezone
+from functools import wraps
 from typing import List, Optional
 
 from aiogram import Bot, Dispatcher, F, Router
@@ -81,6 +82,27 @@ def _utc_time() -> str:
     return datetime.now(timezone.utc).strftime("%H:%M:%S")
 
 
+def safe_handler(handler):
+    """Guard for message handlers: no exception may escape to the bot crash loop."""
+
+    @wraps(handler)
+    async def wrapper(*args, **kwargs) -> None:
+        try:
+            await handler(*args, **kwargs)
+        except Exception:
+            logger.exception("handler error in %s", handler.__name__)
+            message = next((a for a in args if isinstance(a, Message)), None) or next(
+                (v for v in kwargs.values() if isinstance(v, Message)), None
+            )
+            if message is not None:
+                try:
+                    await message.answer("⚠️ <b>Внутренняя ошибка.</b> Попробуйте ещё раз.")
+                except Exception:
+                    logger.exception("failed to report handler error")
+
+    return wrapper
+
+
 def _parse_ints(data: str, n: int) -> List[int]:
     values = [int(p) for p in data.split(":") if p.isdigit() or (p.startswith("-") and p[1:].isdigit())]
     if len(values) != n:
@@ -91,25 +113,21 @@ def _parse_ints(data: str, n: int) -> List[int]:
 def render_server_status(info: ServerInfo) -> str:
     addr = f"<code>{quote_html(info.address)}:{info.port}</code>"
     if info.online:
+        names = ", ".join(quote_html(n) for n in info.players_list)
+        listing = names or "Никого нет"
         return (
-            "🟢 <b>Server Status:</b> Online\n"
+            "🟢 <b>СЕРВЕР ОНЛАЙН</b>\n"
             f"🌐 <b>IP:</b> {addr}\n"
-            f"👥 <b>Online Players:</b> <b>{info.players}</b>/{info.max_players}\n"
-            f"🧱 <b>Version:</b> {quote_html(info.version) or 'unknown'}\n"
-            f"⚡ <b>Latency:</b> {info.latency_ms:.0f} ms\n"
+            f"👥 <b>Игроки:</b> {info.players} / {info.max_players}\n"
+            f"📜 <b>Список:</b> {listing}\n"
+            f"📦 <b>Версия:</b> {quote_html(info.version) or 'unknown'}\n"
         )
     if info.state == "starting":
         return (
-            "🟠 <b>Server Status:</b> Starting…\n"
-            f"🌐 <b>IP:</b> {addr}\n"
-            "⏳ The server is booting up, this can take a few minutes.\n"
+            "🟡 <b>СЕРВЕР ЗАПУСКАЕТСЯ...</b>\n"
+            "⏳ Сервер загружается, это может занять несколько минут.\n"
         )
-    return (
-        "🔴 <b>Server Status:</b> Offline\n"
-        f"🌐 <b>IP:</b> {addr}\n"
-        "👥 <b>Online Players:</b> 0\n"
-        f"ℹ️ <b>Info:</b> {quote_html(info.error) or 'not reachable'}\n"
-    )
+    return "🔴 <b>СЕРВЕР ОФФЛАЙН</b>\n"
 
 
 def render_user_card(user: dict) -> str:
@@ -144,6 +162,7 @@ async def _register_sender(message: Message) -> None:
 # commands
 # ---------------------------------------------------------------------- #
 @router.message(CommandStart())
+@safe_handler
 async def cmd_start(message: Message) -> None:
     await _register_sender(message)
     user_id = message.from_user.id if message.from_user else 0
@@ -169,6 +188,7 @@ async def cmd_start(message: Message) -> None:
 
 
 @router.message(Command("emergency"))
+@safe_handler
 async def cmd_emergency(message: Message) -> None:
     if message.from_user is None or message.from_user.id != OWNER_ID:
         return
@@ -181,6 +201,7 @@ async def cmd_emergency(message: Message) -> None:
 
 
 @router.message(Command("setbackup"))
+@safe_handler
 async def cmd_setbackup(message: Message, command: CommandObject) -> None:
     if message.from_user is None or message.from_user.id != OWNER_ID:
         return
@@ -198,6 +219,7 @@ async def cmd_setbackup(message: Message, command: CommandObject) -> None:
 
 
 @router.message(Command("help"))
+@safe_handler
 async def cmd_help(message: Message) -> None:
     await _register_sender(message)
     if message.from_user is not None and message.from_user.id == OWNER_ID:
@@ -237,12 +259,14 @@ async def cmd_help(message: Message) -> None:
 
 
 @router.message(Command("status"))
+@safe_handler
 async def cmd_status(message: Message) -> None:
     await _register_sender(message)
     await message.answer(render_server_status(await _aternos().get_status()))
 
 
 @router.message(Command("run"))
+@safe_handler
 async def cmd_run(message: Message) -> None:
     await _register_sender(message)
     user_id = message.from_user.id if message.from_user else 0
@@ -452,7 +476,7 @@ async def dashboard_loop() -> None:
     while True:
         try:
             info = await _aternos().get_status()
-            text = render_server_status(info) + f"🕒 <b>Updated:</b> {_utc_time()} UTC"
+            text = render_server_status(info) + f"🕒 <b>Обновлено:</b> {_utc_time()} UTC"
 
             pinned_id = await db.get_pinned_message()
             if pinned_id is None:

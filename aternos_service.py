@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
-from typing import Any, Optional
+from dataclasses import dataclass, field
+from typing import Any, List, Optional
 
 from mcstatus import JavaServer as MCJavaServer
 
@@ -30,6 +30,7 @@ class ServerInfo:
     version: str = ""
     players: int = 0
     max_players: int = 0
+    players_list: List[str] = field(default_factory=list)
     latency_ms: float = 0.0
     error: str = ""
 
@@ -238,6 +239,9 @@ class AternosService:
         info.version = str(version.get("name") or "")
         info.players = int(players.get("online") or 0)
         info.max_players = int(players.get("max") or 0)
+        info.players_list = [
+            str(p["name"]) for p in (players.get("list") or []) if isinstance(p, dict) and p.get("name")
+        ][:10]
         info.latency_ms = round(float(data.get("ping") or 0.0), 1)
         info.error = ""
 
@@ -263,6 +267,9 @@ class AternosService:
             info.state = "online"
             info.players = int(getattr(players, "online", 0) or 0)
             info.max_players = int(getattr(players, "max", 0) or 0)
+            info.players_list = [
+                str(getattr(p, "name", p)) for p in (getattr(players, "names", None) or [])
+            ][:10]
             info.version = str(getattr(version, "name", "") or "")
             info.latency_ms = round(float(getattr(status, "latency", 0.0) or 0.0), 1)
             info.error = ""
