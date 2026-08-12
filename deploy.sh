@@ -88,17 +88,6 @@ fi
 
 # 5. rebuild
 log "rebuilding containers"
-ssh "${SSH_OPTS[@]}" "$TARGET" '
-cd ~/MineOps
-if docker compose version >/dev/null 2>&1; then
-    CMD="docker compose"
-elif command -v docker-compose >/dev/null 2>&1; then
-    CMD="docker-compose"
-else
-    echo "[MineOps] error: neither docker compose nor docker-compose is installed" >&2
-    exit 1
-fi
-$CMD down && $CMD up -d --build
-'
+ssh "${SSH_OPTS[@]}" "$TARGET" 'cd ~/MineOps && if docker compose version >/dev/null 2>&1; then docker compose down && docker compose up -d --build; elif command -v docker-compose >/dev/null 2>&1; then docker-compose down && docker-compose up -d --build; else echo "Error: Docker Compose not found" >&2; exit 1; fi'
 
 log "done. Logs: ssh $TARGET 'cd ~/MineOps && docker compose logs -f'"

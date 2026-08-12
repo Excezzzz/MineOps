@@ -110,18 +110,6 @@ else {
 
 # 5. rebuild
 Write-Step 'Step 5/5: Rebuilding containers'
-$RemoteCmd = @'
-cd ~/MineOps
-if docker compose version >/dev/null 2>&1; then
-    CMD="docker compose"
-elif command -v docker-compose >/dev/null 2>&1; then
-    CMD="docker-compose"
-else
-    echo "[MineOps] error: neither docker compose nor docker-compose is installed" >&2
-    exit 1
-fi
-$CMD down && $CMD up -d --build
-'@
-$RemoteCmd = $RemoteCmd -replace "`r?`n", "`n"
-ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 $Target $RemoteCmd
+$remoteCmd = 'cd ~/MineOps && if docker compose version >/dev/null 2>&1; then docker compose down && docker compose up -d --build; elif command -v docker-compose >/dev/null 2>&1; then docker-compose down && docker-compose up -d --build; else echo ''Error: Docker Compose not found'' >&2; exit 1; fi'
+ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 $Target $remoteCmd
 exit $LASTEXITCODE
