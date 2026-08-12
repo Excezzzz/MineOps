@@ -14,8 +14,8 @@ from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest, TelegramNotFound
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import CallbackQuery, Message
-from aiogram.utils.html import quote_html
 from dotenv import load_dotenv
+from html import escape as quote_html
 
 from aternos_service import AternosError, AternosService, ServerInfo
 from database import Database
