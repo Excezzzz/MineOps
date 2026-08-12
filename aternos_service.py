@@ -46,7 +46,7 @@ class ServerInfo:
 
 
 # python-aternos server.status values that mean "booting up" vs "stopped".
-STATUS_STARTING = {"starting", "start", "loading", "preparing", "restarting", "restart"}
+STATUS_STARTING = {"starting", "start", "loading", "preparing", "restarting", "restart", "queue"}
 
 # How often the Aternos web scraper may be consulted at most (seconds).
 # Live polling runs on the public mcsrvstat API; the python-aternos scrape is
@@ -222,44 +222,49 @@ class AternosService:
     async def get_status(self, timeout: float = 8.0) -> ServerInfo:
         # Never raises: offline/unreachable is an expected outcome.
         #
-        # Hybrid loop: routine updates hit the PUBLIC mcsrvstat API first
-        # (no Aternos panel request => no Cloudflare friction). The cached
-        # python-aternos session is consulted only to distinguish
-        # "offline" from "starting/loading" when mcsrvstat says offline.
+        # Source of truth: the Aternos panel (serv.status from python-aternos)
+        # decides online/starting/offline. mcsrvstat is only a fast enrichment
+        # path: it may lag or fail on dynamic Aternos ports (especially for an
+        # online server with 0 players), so it must never downrate a running
+        # server. Status evaluation is wrapped in try/except so network hiccups
+        # cannot flip an online server to offline.
         info = ServerInfo(address=self.server_address, port=self.server_port)
 
         data = await self._fetch_status_api(timeout)
-        if data is not None:
-            if data.get("online"):
-                self._apply_status_payload(info, data)
-                return info
-            # mcsrvstat says offline: check the Aternos panel (cached session)
-            panel = await self._panel_state()
-            if panel == "starting":
-                info.state = "starting"
-                info.error = "The server is starting up; it can take a few minutes."
-            elif panel == "online":
-                # Panel disagrees with the API (API cache lag): trust the panel.
-                server = await self._cached_server_safe()
-                if server is not None:
-                    self._apply_server_props(info, server)
-                else:
-                    info.error = "Server is offline."
-            else:
-                info.state = "offline"
-                info.error = "Server is offline." if panel == "offline" else "Server status unknown."
+        if data is not None and data.get("online"):
+            self._apply_status_payload(info, data)
             return info
 
-        # mcsrvstat unreachable: fall back to the Aternos panel as source of truth.
-        server = await self._cached_server_safe()
-        if server is not None:
-            await self._maybe_refresh_panel(server)
-            self._apply_server_props(info, server)
+        # mcsrvstat offline/unreachable: the Aternos panel decides.
+        try:
+            panel = await self._panel_state()
+        except Exception as exc:
+            logger.warning("panel state evaluation failed: %s", exc)
+            panel = None
+
+        if panel == "online":
+            # NIGramma is ONLINE: never report it as offline, even if the
+            # external API says otherwise or reports 0 players.
+            server = await self._cached_server_safe()
+            if server is not None:
+                self._apply_server_props(info, server)
+            else:
+                info.state = "online"
+                info.online = True
             return info
-        # Panel also unreachable: last-resort direct socket probe.
-        await self._probe_direct(info, timeout)
-        if not info.online and not info.error:
-            info.error = "Server is offline."
+
+        if panel == "starting":
+            info.state = "starting"
+            info.error = "The server is starting up; it can take a few minutes."
+            return info
+
+        # Panel says offline, or the panel is unreachable/backing off.
+        info.state = "offline"
+        info.error = "Server is offline." if panel == "offline" else "Server status unknown."
+
+        # Last-resort direct socket probe (never downrates; only refines).
+        if panel is None:
+            await self._probe_direct(info, timeout)
         return info
 
     async def _cached_server_safe(self) -> Optional[Any]:
@@ -289,13 +294,15 @@ class AternosService:
         """Best-effort Aternos state: 'online' / 'starting' / 'offline' / None."""
         try:
             server = await self._get_server()
-            await self._maybe_refresh_panel(server)
-            raw = str(getattr(server, "status", "") or "").strip().lower()
-            if raw in STATUS_STARTING:
-                return "starting"
-            if raw == "online":
-                return "online"
-            return "offline"
+            if server is not None:
+                await self._maybe_refresh_panel(server)
+                raw = str(getattr(server, "status", "") or "").strip().lower()
+                if raw in STATUS_STARTING:
+                    return "starting"
+                if raw == "online":
+                    return "online"
+                return "offline"
+            return None
         except Exception as exc:
             logger.debug("panel state check failed: %s", exc)
             return None
