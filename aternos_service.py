@@ -55,6 +55,13 @@ PANEL_REFRESH_SECONDS = max(
     30.0, float(os.getenv("PANEL_REFRESH_SECONDS", "120") or 120)
 )
 
+# Minimum pause after a failed Aternos login/panel session (seconds).
+# A failed login is cached for this long so the polling loop does not hit the
+# Cloudflare-challenged panel again on every tick while auth is blocked.
+AUTH_BACKOFF_SECONDS = max(
+    30.0, float(os.getenv("AUTH_BACKOFF_SECONDS", "600") or 600)
+)
+
 
 class AternosService:
     def __init__(
@@ -75,6 +82,7 @@ class AternosService:
         self._login_lock = asyncio.Lock()
         self._op_lock = asyncio.Lock()
         self._last_panel_fetch = 0.0
+        self._next_login_attempt = 0.0
 
     def _login_sync(self) -> Any:
         """Create a cached python-aternos Client (session-first, then credentials)."""
@@ -97,20 +105,31 @@ class AternosService:
             if self._server is not None and self.client is not None:
                 # Reuse the authenticated session - do NOT re-login on every tick.
                 return self._server
+            now = time.monotonic()
+            if now < self._next_login_attempt:
+                # Negative cache: a recent failure is remembered, so the polling
+                # loop must NOT hammer the Cloudflare-challenged panel each tick.
+                raise AternosError(
+                    "Aternos login temporarily blocked; retrying in "
+                    f"{max(1, int(self._next_login_attempt - now))}s"
+                )
             client = None
             try:
                 client = await asyncio.to_thread(self._login_sync)
             except Exception as exc:
                 from python_aternos.aterrors import CredentialsError
 
+                self._next_login_attempt = now + AUTH_BACKOFF_SECONDS
                 if isinstance(exc, CredentialsError):
                     raise AternosError(AUTH_ERROR_MSG) from exc
                 raise AternosError(f"Aternos login failed: {exc}") from exc
             try:
                 servers = await asyncio.to_thread(client.account.list_servers)
             except Exception as exc:
+                self._next_login_attempt = now + AUTH_BACKOFF_SECONDS
                 raise AternosError(f"could not load Aternos servers: {exc}") from exc
             if not servers:
+                self._next_login_attempt = now + AUTH_BACKOFF_SECONDS
                 raise AternosError("no Aternos servers found on this account")
             server = None
             for candidate in servers:
@@ -123,6 +142,7 @@ class AternosService:
                     break
             self.client = client
             self._server = server or servers[0]
+            self._next_login_attempt = 0.0
             return self._server
 
     @staticmethod
@@ -214,7 +234,6 @@ class AternosService:
                 self._apply_status_payload(info, data)
                 return info
             # mcsrvstat says offline: check the Aternos panel (cached session)
-            logger.info("get_status: api says offline, consulting panel")
             panel = await self._panel_state()
             if panel == "starting":
                 info.state = "starting"
@@ -232,7 +251,6 @@ class AternosService:
             return info
 
         # mcsrvstat unreachable: fall back to the Aternos panel as source of truth.
-        logger.info("get_status: mcsrvstat unreachable, panel fallback")
         server = await self._cached_server_safe()
         if server is not None:
             await self._maybe_refresh_panel(server)
@@ -259,10 +277,8 @@ class AternosService:
         """
         now = time.monotonic()
         if now - self._last_panel_fetch < PANEL_REFRESH_SECONDS:
-            logger.info("panel refresh SKIPPED (%.0fs left)", PANEL_REFRESH_SECONDS - (now - self._last_panel_fetch))
             return
         try:
-            logger.info("panel refresh EXECUTED (last=%.0fs ago)", now - self._last_panel_fetch)
             await asyncio.to_thread(server.fetch)
         except Exception as exc:
             logger.debug("panel refresh failed: %s", exc)
