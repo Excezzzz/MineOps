@@ -158,13 +158,16 @@ async def get_server_status(server_ip: str, port: Optional[int] = None) -> dict:
         return _empty_payload(server_ip)
 
     api_payload = await _api_status(server_ip)
+
+    # API молчит или говорит offline, а сервер жив: Aternos отвечает только
+    # на legacy-ping (modern status protocol молчит) — пробуем порт 25565.
+    if api_payload is None or not api_payload.get("is_online"):
+        legacy = await _legacy_ping(host, 25565)
+        if legacy:
+            return legacy
+
     if api_payload is not None:
         return api_payload
-
-    # API недоступен — пробуем legacy-ping на стандартном порту.
-    payload = await _legacy_ping(host, 25565)
-    if payload:
-        return payload
     return _empty_payload(server_ip)
 
 
