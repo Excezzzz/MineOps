@@ -80,6 +80,10 @@ class Database:
         cur = await self.conn.execute("SELECT * FROM chats ORDER BY chat_id")
         return [dict(r) for r in await cur.fetchall()]
 
+    async def delete_chat(self, chat_id: int) -> None:
+        await self.conn.execute("DELETE FROM chats WHERE chat_id = ?", (chat_id,))
+        await self.conn.commit()
+
     # --- users (RBAC) ---
     async def upsert_user(self, chat_id: int, user_id: int, username: str = "", first_name: str = "") -> None:
         # has_access is preserved on conflict so granted users keep their access.

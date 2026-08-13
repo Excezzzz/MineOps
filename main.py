@@ -20,6 +20,7 @@ from aiogram.types import (
     BotCommandScopeAllPrivateChats,
     BotCommandScopeDefault,
     CallbackQuery,
+    ChatMemberUpdated,
     Message,
 )
 from dotenv import load_dotenv
@@ -59,6 +60,9 @@ logger = logging.getLogger("mineops")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 OWNER_ID = int(os.getenv("OWNER_ID", "0") or 0)
+DASHBOARD_CHAT_ID = int(os.getenv("DASHBOARD_CHAT_ID", "0") or 0)
+# Pinned dashboard target: the group chat set in .env, or the owner's PM.
+DASH_TARGET = DASHBOARD_CHAT_ID if DASHBOARD_CHAT_ID > 0 else OWNER_ID
 UPDATE_SECONDS = max(5.0, float(os.getenv("DASHBOARD_UPDATE_SECONDS", "30")))
 
 db = Database(owner_id=OWNER_ID)
@@ -160,6 +164,20 @@ async def _register_sender(message: Message) -> None:
 
 
 # ---------------------------------------------------------------------- #
+# chat membership tracking (chat list = groups where the bot is present)
+# ---------------------------------------------------------------------- #
+@router.my_chat_member()
+@safe_handler
+async def on_my_chat_member(update: ChatMemberUpdated) -> None:
+    if update.chat.type not in ("group", "supergroup"):
+        return
+    if update.new_chat_member.status in ("left", "kicked"):
+        await db.delete_chat(update.chat.id)
+        return
+    await db.upsert_chat(update.chat.id, update.chat.title or "", update.chat.type)
+
+
+# ---------------------------------------------------------------------- #
 # commands
 # ---------------------------------------------------------------------- #
 @router.message(CommandStart())
@@ -169,7 +187,7 @@ async def cmd_start(message: Message) -> None:
     user_id = message.from_user.id if message.from_user else 0
 
     if user_id == OWNER_ID:
-        chats = await db.list_chats()
+        chats = [c for c in await db.list_chats() if c["type"] in ("group", "supergroup")]
         await message.answer(
             "🎛 <b>Owner menu</b>\nSelect a chat to manage its users.",
             reply_markup=chats_menu_kb(chats, page=0),
@@ -448,9 +466,9 @@ async def cb_dash_start(cb: CallbackQuery) -> None:
 # background loops
 # ---------------------------------------------------------------------- #
 async def _publish_dashboard(text: str) -> None:
-    msg = await _bot().send_message(OWNER_ID, text, reply_markup=dashboard_kb())
+    msg = await _bot().send_message(DASH_TARGET, text, reply_markup=dashboard_kb())
     try:
-        await _bot().pin_chat_message(OWNER_ID, msg.message_id, disable_notification=True)
+        await _bot().pin_chat_message(DASH_TARGET, msg.message_id, disable_notification=True)
     except (TelegramBadRequest, TelegramNotFound):
         logger.warning("could not pin dashboard")
     await db.set_pinned_message(msg.message_id)
@@ -461,8 +479,8 @@ async def _recreate_dashboard(text: str) -> None:
     pinned_id = await db.get_pinned_message()
     if pinned_id is not None:
         for attempt in (
-            lambda: _bot().unpin_chat_message(OWNER_ID, pinned_id),
-            lambda: _bot().delete_message(OWNER_ID, pinned_id),
+            lambda: _bot().unpin_chat_message(DASH_TARGET, pinned_id),
+            lambda: _bot().delete_message(DASH_TARGET, pinned_id),
         ):
             try:
                 await attempt()
@@ -485,7 +503,7 @@ async def dashboard_loop() -> None:
             else:
                 try:
                     await _bot().edit_message_text(
-                        text, chat_id=OWNER_ID, message_id=pinned_id, reply_markup=dashboard_kb()
+                        text, chat_id=DASH_TARGET, message_id=pinned_id, reply_markup=dashboard_kb()
                     )
                 except TelegramBadRequest as exc:
                     if "message is not modified" not in str(exc):
