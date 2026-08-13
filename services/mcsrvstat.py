@@ -155,7 +155,7 @@ async def _legacy_ping(host: str, port: int) -> Optional[dict]:
             except Exception:
                 pass
 
-        text = (data + remaining).decode("utf-16-be", errors="replace")
+        text = remaining.decode("utf-16-be", errors="replace")
         fields = [f.strip() for f in text.split("\x00") if f.strip()]
         if len(fields) < 3:
             logger.warning("legacy ping %s:%s: битый ответ: %r", host, port, text[:120])
