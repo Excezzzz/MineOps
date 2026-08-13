@@ -112,6 +112,7 @@ async def _modern_slp(host: str, port: int) -> Optional[dict]:
         version = (data.get("version") or {}).get("name") or "Неизвестно"
         return {
             "ip": f"{host}:{port}",
+            "port": int(port),
             "is_online": True,
             "players_online": int(players.get("online") or 0),
             "players_max": int(players.get("max") or 0),
@@ -180,6 +181,7 @@ async def _legacy_ping(host: str, port: int) -> Optional[dict]:
 
         return {
             "ip": f"{host}:{port}",
+            "port": int(port),
             "is_online": True,
             "players_online": players_online,
             "players_max": players_max,
