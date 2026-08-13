@@ -16,7 +16,7 @@ import time
 from html import escape as quote_html
 
 from aiogram import Bot
-from aiogram.exceptions import TelegramAPIError
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 
 import database
 from keyboards.group_kb import get_dashboard_kb
@@ -194,6 +194,46 @@ async def _update_chat_dashboard(bot: Bot, chat_id: int) -> None:
     await _render_dashboard(bot, chat_id, format_dashboard_text(merged), get_dashboard_kb(merged, chat_id))
 
 
+async def _update_owner_pm_dashboard(bot: Bot, owner: dict, merged: list[dict]) -> None:
+    """Закреплённый дашборд владельца в ЛС: обновляет или (пере)создаёт.
+
+    merged — список серверов со статусами (как у format_dashboard_text).
+    Кнопки управления в ЛС не показываем — они работают только в группах.
+    """
+    text = format_dashboard_text(merged)
+    pm_pinned = await database.get_owner_pm_pinned(int(owner["user_id"]))
+    if pm_pinned:
+        try:
+            await bot.edit_message_text(
+                text=text,
+                chat_id=int(owner["user_id"]),
+                message_id=pm_pinned,
+            )
+            return
+        except TelegramBadRequest:
+            return  # контент не изменился — дашборд актуален
+        except TelegramAPIError as exc:
+            logger.warning(
+                "owner %s: edit PM dashboard failed (%s), will re-send",
+                owner["user_id"], exc,
+            )
+    try:
+        msg = await bot.send_message(int(owner["user_id"]), text=text)
+        await bot.pin_chat_message(
+            chat_id=int(owner["user_id"]),
+            message_id=msg.message_id,
+            disable_notification=True,
+        )
+        await database.set_owner_pm_pinned(int(owner["user_id"]), msg.message_id)
+        logger.info(
+            "owner %s: PM-дашборд создан и закреплён (msg %s)",
+            owner["user_id"], msg.message_id,
+        )
+    except Exception as exc:
+        # Юзер мог заблокировать бота — не фатально.
+        logger.warning("owner %s: PM-дашборд не создан: %s", owner["user_id"], exc)
+
+
 async def update_dashboards(bot: Bot) -> None:
     """Обновляет дашборды всех владельцев в их привязанных чатах.
 
@@ -207,6 +247,7 @@ async def update_dashboards(bot: Bot) -> None:
     for owner in owners:
         servers = await database.get_servers_by_owner(owner["user_id"])
         logger.info("owner %s: %d серверов", owner["user_id"], len(servers))
+        statuses_by_server: dict[int, dict] = {}
         for server in servers:
             chats = await database.get_chats_for_server(server["id"])
             logger.info(
@@ -215,6 +256,7 @@ async def update_dashboards(bot: Bot) -> None:
             )
             port = await _ensure_server_port(int(owner["user_id"]), server["id"])
             status = await mcsrvstat.get_server_status(server["server_ip"], port=port)
+            statuses_by_server[int(server["id"])] = status
             logger.info(
                 "server %s: online=%s (players %s/%s, port=%s)",
                 server["server_ip"],
@@ -235,6 +277,12 @@ async def update_dashboards(bot: Bot) -> None:
                 )
         for chat in await database.get_chats_by_owner(owner["user_id"]):
             await _update_chat_dashboard(bot, int(chat["chat_id"]))
+        # Закреплённый дашборд в ЛС со статусами ВСЕХ серверов владельца.
+        if servers:
+            pm_merged = [
+                {**s, **statuses_by_server.get(int(s["id"]), {})} for s in servers
+            ]
+            await _update_owner_pm_dashboard(bot, owner, pm_merged)
 
 
 async def update_chats_dashboards(bot: Bot, chat_ids: list[int]) -> None:

@@ -25,7 +25,7 @@ import aiosqlite
 
 from config import config
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 def _now_iso() -> str:
@@ -130,6 +130,18 @@ class Database:
             await self.conn.commit()
             await self._set_version(3)
             version = 3
+
+        if version < 4:
+            # v4: закреплённый дашборд владельца в ЛС с ботом
+            # (pm_pinned_msg_id — id сообщения-дашборда в личке владельца).
+            columns = await self._table_columns("owners")
+            if "pm_pinned_msg_id" not in columns:
+                await self.conn.execute(
+                    "ALTER TABLE owners ADD COLUMN pm_pinned_msg_id INTEGER"
+                )
+                await self.conn.commit()
+            await self._set_version(4)
+            version = 4
 
         if version < SCHEMA_VERSION:
             raise RuntimeError(f"Неизвестная версия схемы БД: {version}")
@@ -306,6 +318,24 @@ class Database:
         )
         row = await cur.fetchone()
         return bool(row["lockdown_mode"]) if row is not None else False
+
+    async def set_owner_pm_pinned(self, user_id: int, msg_id: int) -> None:
+        """Сохраняет id закреплённого дашборда владельца в ЛС с ботом."""
+        await self.conn.execute(
+            "UPDATE owners SET pm_pinned_msg_id = ?, updated_at = ? WHERE user_id = ?",
+            (msg_id, _now_iso(), user_id),
+        )
+        await self.conn.commit()
+
+    async def get_owner_pm_pinned(self, user_id: int) -> Optional[int]:
+        """id закреплённого дашборда владельца в ЛС (None — ещё не создан)."""
+        cur = await self.conn.execute(
+            "SELECT pm_pinned_msg_id FROM owners WHERE user_id = ?", (user_id,)
+        )
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        return int(row["pm_pinned_msg_id"]) if row["pm_pinned_msg_id"] is not None else None
 
     # ------------------------------------------------------------------ #
     # servers
@@ -669,6 +699,16 @@ async def is_owner(user_id: int) -> bool:
 async def is_chat_owner(chat_id: int, user_id: int) -> bool:
     """Является ли пользователь владельцем чата (обёртка)."""
     return await get_db().is_chat_owner(chat_id, user_id)
+
+
+async def set_owner_pm_pinned(user_id: int, msg_id: int) -> None:
+    """Сохраняет id закреплённого дашборда владельца в ЛС (обёртка)."""
+    await get_db().set_owner_pm_pinned(user_id, msg_id)
+
+
+async def get_owner_pm_pinned(user_id: int) -> Optional[int]:
+    """id закреплённого дашборда владельца в ЛС (обёртка)."""
+    return await get_db().get_owner_pm_pinned(user_id)
 
 
 async def update_owner_session(user_id: int, encrypted_session: str) -> None:

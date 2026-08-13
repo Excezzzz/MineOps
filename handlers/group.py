@@ -91,13 +91,22 @@ async def _require_chat_permission(callback_query: CallbackQuery) -> tuple | Non
 # ---------------------------------------------------------------------- #
 @router.message(F.chat.type.in_({"group", "supergroup"}), Command("link"))
 async def link_command(message: Message) -> None:
-    """Привязка чата: регистрирует чат, привязывает ВСЕ серверы владельца
-    и сразу создаёт и закрепляет дашборд (без пикера серверов)."""
+    """Привязка чата: только для зарегистрированного владельца.
+
+    Проверки: владелец зарегистрирован (get_owner) -> есть серверы ->
+    чат не занят другим владельцем -> регистрируем чат, привязываем ВСЕ
+    серверы и сразу создаём/закрепляем дашборд.
+    """
     user = message.from_user
     if user is None:
         return
-    if not await database.is_owner(user.id):
-        await message.answer("❌ Ты не владелец. Пройди онбординг в ЛС с ботом (/start).")
+    if await database.get_owner(user.id) is None:
+        await message.answer("❌ Ты не зарегистрирован. Напиши мне в ЛС /start чтобы пройти онбординг")
+        return
+
+    servers = await database.get_servers_by_owner(user.id)
+    if not servers:
+        await message.answer("❌ У тебя нет серверов. Добавь их в ЛС с ботом")
         return
 
     chat_id = int(message.chat.id)
@@ -107,11 +116,6 @@ async def link_command(message: Message) -> None:
         return
 
     await database.add_chat(chat_id, user.id, message.chat.title or "")
-
-    servers = await database.get_servers_by_owner(user.id)
-    if not servers:
-        await message.answer("❌ У тебя нет серверов, добавь через ЛС с ботом (/start).")
-        return
 
     for server in servers:
         await database.link_server_to_chat(chat_id, server["id"])
@@ -142,11 +146,17 @@ async def link_command(message: Message) -> None:
 
 @router.message(F.chat.type.in_({"group", "supergroup"}), Command("unlink"), IsOwnerFilter())
 async def unlink_command(message: Message) -> None:
-    """Владелец отвязывает чат: дашборд останавливается и открепляется."""
+    """Отвязать чат может ТОЛЬКО владелец, который его привязал."""
+    user = message.from_user
+    if user is None:
+        return
     chat_id = int(message.chat.id)
-    owner = await database.get_chat_owner(chat_id)
-    if owner is None:
+    chat = await database.get_chat(chat_id)
+    if chat is None:
         await message.answer("Чат не привязан.")
+        return
+    if chat["owner_id"] != user.id:
+        await message.answer("❌ Только владелец чата может отвязать его.")
         return
     pinned = await database.get_chat_pinned_msg(chat_id)
     if pinned:
@@ -155,7 +165,7 @@ async def unlink_command(message: Message) -> None:
         except Exception as exc:
             logger.warning("unlink: снять закреп не удалось: %s", exc)
     await database.remove_chat(chat_id)
-    await database.log_action(owner["user_id"], "chat_unlink", f"chat {chat_id}", chat_id=chat_id)
+    await database.log_action(user.id, "chat_unlink", f"chat {chat_id}", chat_id=chat_id)
     await message.answer("✅ Чат отвязан. Дашборд остановлен.")
 
 
@@ -200,6 +210,7 @@ async def help_command(message: Message) -> None:
 @router.callback_query(ServerCb.filter())
 async def on_server_action(callback_query: CallbackQuery, callback_data: ServerCb) -> None:
     """Обрабатывает кнопки управления сервером на дашборде."""
+    await callback_query.answer()  # сразу гасим «часики», тяжёлая работа — дальше
     if not callback_query.message.chat or callback_query.message.chat.type == "private":
         await callback_query.answer("Кнопки дашборда работают в групповом чате.")
         return
@@ -247,6 +258,7 @@ async def on_server_action(callback_query: CallbackQuery, callback_data: ServerC
 @router.callback_query(F.data == "refresh_dashboard")
 async def on_refresh_dashboard(callback_query: CallbackQuery) -> None:
     """Кнопка «Обновить» на дашборде — принудительный апдейт."""
+    await callback_query.answer()  # мгновенно убираем спиннер кнопки
     if callback_query.message.chat and callback_query.message.chat.type != "private":
         await dashboard._update_chat_dashboard(callback_query.bot, int(callback_query.message.chat.id))
         await callback_query.answer("🔄 Дашборд обновлён.")
@@ -260,6 +272,7 @@ async def on_refresh_dashboard(callback_query: CallbackQuery) -> None:
 @router.callback_query(ReqAccessCb.filter())
 async def on_request_access(callback_query: CallbackQuery, callback_data: ReqAccessCb) -> None:
     """Участник без доступа запрашивает права у владельца чата."""
+    await callback_query.answer()  # сразу гасим «часики»
     user = callback_query.from_user
     if user is None:
         return
@@ -306,6 +319,7 @@ async def on_request_access(callback_query: CallbackQuery, callback_data: ReqAcc
 @router.callback_query(ApproveAccessCb.filter())
 async def on_approve_access(callback_query: CallbackQuery, callback_data: ApproveAccessCb) -> None:
     """Владелец чата одобряет/отклоняет запрос доступа."""
+    await callback_query.answer()  # сразу гасим «часики»
     user = callback_query.from_user
     if user is None:
         return

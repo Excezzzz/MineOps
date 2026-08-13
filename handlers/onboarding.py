@@ -121,6 +121,7 @@ async def on_pick_server(
     state: FSMContext,
 ) -> None:
     """Чекбоксы выбора серверов и кнопка «Готово»."""
+    await callback_query.answer()  # сразу гасим «часики»
     data = await state.get_data()
     servers: list = data.get("servers", [])
     selected: set = set(data.get("selected", []))

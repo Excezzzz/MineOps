@@ -118,6 +118,7 @@ async def cmd_panel(message: Message) -> None:
 @router.callback_query(PanelCb.filter())
 async def on_panel(callback_query: CallbackQuery, callback_data: PanelCb) -> None:
     user = callback_query.from_user
+    await callback_query.answer()  # сразу гасим «часики»
     if user is None or not await _require_owner(callback_query, user.id):
         return
     action = callback_data.action
@@ -166,6 +167,7 @@ async def on_panel(callback_query: CallbackQuery, callback_data: PanelCb) -> Non
 @router.callback_query(PanelServerCb.filter())
 async def on_panel_server(callback_query: CallbackQuery, callback_data: PanelServerCb) -> None:
     user = callback_query.from_user
+    await callback_query.answer()  # сразу гасим «часики»
     if user is None or not await _require_owner(callback_query, user.id):
         return
     server = await database.get_server(int(callback_data.server_id))
@@ -192,6 +194,7 @@ async def on_panel_server(callback_query: CallbackQuery, callback_data: PanelSer
 async def on_panel_action(callback_query: CallbackQuery, callback_data: PanelActionCb) -> None:
     """Действия над сервером из панели владельца."""
     user = callback_query.from_user
+    await callback_query.answer()  # сразу гасим «часики», тяжёлая работа — дальше
     if user is None or not await _require_owner(callback_query, user.id):
         return
     server = await database.get_server(int(callback_data.server_id))
@@ -250,6 +253,7 @@ async def on_panel_action(callback_query: CallbackQuery, callback_data: PanelAct
 @router.callback_query(PanelChatCb.filter())
 async def on_panel_chat(callback_query: CallbackQuery, callback_data: PanelChatCb) -> None:
     user = callback_query.from_user
+    await callback_query.answer()  # сразу гасим «часики»
     if user is None or not await _require_owner(callback_query, user.id):
         return
     chat_id = int(callback_data.chat_id)
@@ -297,6 +301,7 @@ async def on_panel_chat(callback_query: CallbackQuery, callback_data: PanelChatC
 @router.callback_query(UsersPageCb.filter())
 async def on_users_page(callback_query: CallbackQuery, callback_data: UsersPageCb) -> None:
     user = callback_query.from_user
+    await callback_query.answer()  # сразу гасим «часики»
     if user is None or not await _require_owner(callback_query, user.id):
         return
     chat_id = int(callback_data.chat_id)
@@ -331,6 +336,7 @@ async def _show_users_page(callback_query: CallbackQuery, owner_id: int, chat_id
 @router.callback_query(OwnerSettingsCb.filter())
 async def on_owner_settings(callback_query: CallbackQuery, callback_data: OwnerSettingsCb) -> None:
     user = callback_query.from_user
+    await callback_query.answer()  # сразу гасим «часики»
     if user is None or not await _require_owner(callback_query, user.id):
         return
     if callback_data.action == "lockdown":
