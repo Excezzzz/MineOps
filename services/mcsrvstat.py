@@ -238,7 +238,10 @@ async def get_server_status(server_ip: str, port: Optional[int] = None) -> dict:
         return api_payload
 
     api_port = (api_payload or {}).get("port")
-    target_port = explicit_port or api_port or 25565
+    # Порт из ответа API важнее кеша: он актуален даже после смены порта
+    # при рестарте сервера (редирект *.aternos.me:25565 отвечает всегда,
+    # но с фейковыми данными 0/0 и «A Minecraft server»).
+    target_port = api_port or explicit_port or 25565
 
     slp = await _modern_slp(host, target_port)
     if slp is not None:

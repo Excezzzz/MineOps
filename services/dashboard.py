@@ -31,6 +31,32 @@ _starting_until = 0
 _queue_positions: dict[int, int] = {}
 
 
+async def _ensure_server_port(owner_id: int, server_id: int) -> int | None:
+    """Актуальный порт сервера: кеш (server_meta), если он достоверен.
+
+    Редирект Aternos на 25565 отвечает фейком (0/0 игроков, «A Minecraft
+    server»), поэтому пустой или «25565» порт запрашивается у панели
+    Aternos один раз и сохраняется. Ошибки панели не фатальны.
+    """
+    port = await database.get_server_port(server_id)
+    if port and port != 25565:
+        return port
+    try:
+        from services.aternos_api import AternosError, AternosManager
+
+        info = await AternosManager(owner_id).get_queue_status(server_id)
+        panel_port = int(info.get("port") or 0) if info.get("port") else 0
+        if panel_port and panel_port != 25565:
+            await database.set_server_port(server_id, panel_port)
+            logger.info(
+                "сервер (id=%s): порт из панели Aternos = %s", server_id, panel_port
+            )
+            return panel_port
+    except AternosError:
+        pass
+    return None
+
+
 def mark_as_starting(seconds: int = 300) -> None:
     """Помечает серверы как запускающиеся на ближайшие `seconds` секунд."""
     global _starting_until
@@ -151,7 +177,9 @@ async def _update_chat_dashboard(bot: Bot, chat_id: int) -> None:
     if not servers:
         return  # владелец ещё не привязал серверы — дашборд не нужен
 
-    servers = [{**s, "port": await database.get_server_port(s["id"])} for s in servers]
+    for s in servers:
+        port = await _ensure_server_port(int(s["owner_id"]), s["id"])
+        s["port"] = port
     statuses = await mcsrvstat.get_servers_status(servers)
     for s in servers:
         status = statuses.get(s["server_ip"], {})
@@ -185,7 +213,7 @@ async def update_dashboards(bot: Bot) -> None:
                 "server %s (id=%s): %d чатов",
                 server["server_ip"], server["id"], len(chats),
             )
-            port = await database.get_server_port(server["id"])
+            port = await _ensure_server_port(int(owner["user_id"]), server["id"])
             status = await mcsrvstat.get_server_status(server["server_ip"], port=port)
             logger.info(
                 "server %s: online=%s (players %s/%s, port=%s)",
