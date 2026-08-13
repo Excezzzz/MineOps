@@ -1,601 +1,171 @@
-"""MineOps - Telegram bot for Aternos Minecraft server management."""
+"""MineOps — Telegram-бот для управления Minecraft-серверами на Aternos
+(multi-tenant: каждый владелец управляет своими серверами).
+
+Точка входа: БД (с миграциями) -> бот/диспетчер -> мидлвари -> шедулер ->
+поллинг. Фон:
+  * live-дашборды: обновление каждые UPDATE_INTERVAL секунд (mcsrvstat.us);
+  * авто-бэкапы: per-server по auto_backup_h (python-aternos, to_thread);
+  * глобальный перехватчик ошибок шлёт алерт суперадмину.
+
+Порядок роутеров важен: onboarding -> admin -> group (групповые callback-и
+не пересекаются с панелью, но приоритет у личного меню).
+"""
 
 from __future__ import annotations
 
 import asyncio
 import logging
 import os
-from datetime import datetime, timezone
-from functools import wraps
-from typing import List, Optional
-
-from aiogram import Bot, Dispatcher, F, Router
-from aiogram.client.default import DefaultBotProperties
-from aiogram.enums import ParseMode
-from aiogram.exceptions import TelegramBadRequest, TelegramNotFound
-from aiogram.filters import Command, CommandObject, CommandStart
-from aiogram.types import (
-    BotCommand,
-    BotCommandScopeAllGroupChats,
-    BotCommandScopeAllPrivateChats,
-    BotCommandScopeDefault,
-    CallbackQuery,
-    ChatMemberUpdated,
-    Message,
-)
-from dotenv import load_dotenv
 from html import escape as quote_html
 
-from aternos_service import AternosError, AternosService, ServerInfo
-from database import Database
-from keyboards import (
-    ACTION_BACKUP,
-    ACTION_CHATS,
-    ACTION_CLOSE,
-    ACTION_DASH_START,
-    ACTION_GRANT,
-    ACTION_LOCKDOWN,
-    ACTION_LOCKDOWN_CONFIRM,
-    ACTION_NOOP,
-    ACTION_REVOKE,
-    ACTION_START,
-    ACTION_STOP,
-    ACTION_USER_CARD,
-    ACTION_USER_LIST,
-    chats_menu_kb,
-    close_kb,
-    dashboard_kb,
-    lockdown_kb,
-    user_card_kb,
-    users_kb,
-)
+from aiogram import Bot, Dispatcher
+from aiogram.client.default import DefaultBotProperties
+from aiogram.types import BotCommand, ErrorEvent
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.interval import IntervalTrigger
 
-load_dotenv()
+import database
+from config import config
+from handlers import admin, group, onboarding
+from middlewares.firewall import FirewallMiddleware
+from middlewares.register import RegisterMiddleware
 
+os.makedirs("data", exist_ok=True)
 logging.basicConfig(
-    level=os.getenv("LOG_LEVEL", "INFO").upper(),
-    format="%(asctime)s %(levelname)-8s %(name)s %(message)s",
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)-8s %(name)s | %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler("data/mineops.log", encoding="utf-8"),
+    ],
 )
-logger = logging.getLogger("mineops")
+logger = logging.getLogger(__name__)
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "")
-OWNER_ID = int(os.getenv("OWNER_ID", "0") or 0)
-DASHBOARD_CHAT_ID = int(os.getenv("DASHBOARD_CHAT_ID", "0") or 0)
-# Pinned dashboard target: the group chat set in .env, or the owner's PM.
-DASH_TARGET = DASHBOARD_CHAT_ID if DASHBOARD_CHAT_ID > 0 else OWNER_ID
-UPDATE_SECONDS = max(5.0, float(os.getenv("DASHBOARD_UPDATE_SECONDS", "30")))
+UPDATE_INTERVAL = 30  # сек: период обновления дашбордов
+BACKUP_JOB_PREFIX = "backup_srv_"  # id фоновых задач авто-бэкапа
 
-db = Database(owner_id=OWNER_ID)
-bot: Optional[Bot] = None
-aternos: Optional[AternosService] = None
-_tasks: List[asyncio.Task] = []
-router = Router()
+# Глобальная ссылка на шедулер: нужна admin-обработчикам для пересоздания
+# авто-бэкапов после смены интервалов (get_scheduler()).
+_scheduler: AsyncIOScheduler | None = None
 
 
-def _bot() -> Bot:
-    assert bot is not None
-    return bot
+def get_scheduler() -> AsyncIOScheduler | None:
+    """Возвращает активный шедулер (или None до старта)."""
+    return _scheduler
 
 
-def _aternos() -> AternosService:
-    assert aternos is not None
-    return aternos
+async def update_dashboards_job(bot: Bot) -> None:
+    """Обновляет дашборды всех владельцев (вызывается шедулером)."""
+    from services.dashboard import update_dashboards
+
+    await update_dashboards(bot)
 
 
-def _utc_time() -> str:
-    return datetime.now(timezone.utc).strftime("%H:%M:%S")
+async def backup_job(bot: Bot, owner_id: int, server_id: int) -> None:
+    """Авто-бэкап одного сервера; при неудаче — уведомление владельцу."""
+    from services.aternos_api import AternosError, AternosManager
 
-
-def safe_handler(handler):
-    """Guard for message handlers: no exception may escape to the bot crash loop."""
-
-    @wraps(handler)
-    async def wrapper(*args, **kwargs) -> None:
-        try:
-            await handler(*args, **kwargs)
-        except Exception:
-            logger.exception("handler error in %s", handler.__name__)
-            message = next((a for a in args if isinstance(a, Message)), None) or next(
-                (v for v in kwargs.values() if isinstance(v, Message)), None
-            )
-            if message is not None:
-                try:
-                    await message.answer("⚠️ <b>Внутренняя ошибка.</b> Попробуйте ещё раз.")
-                except Exception:
-                    logger.exception("failed to report handler error")
-
-    return wrapper
-
-
-def _parse_ints(data: str, n: int) -> List[int]:
-    values = [int(p) for p in data.split(":") if p.isdigit() or (p.startswith("-") and p[1:].isdigit())]
-    if len(values) != n:
-        raise ValueError(f"bad callback payload: {data!r}")
-    return values
-
-
-def render_server_status(info: ServerInfo) -> str:
-    addr = f"<code>{quote_html(info.address)}:{info.port}</code>"
-    if info.online:
-        names = ", ".join(quote_html(n) for n in info.players_list)
-        listing = names or "Никого нет"
-        version = quote_html(info.version) or "unknown"
-        return (
-            "🟢 <b>СЕРВЕР ОНЛАЙН</b>\n"
-            f"🌐 <b>IP:</b> {addr}\n"
-            f"👥 <b>Игроки:</b> <code>{info.players} / {info.max_players}</code>\n"
-            f"📜 <b>Список:</b> <code>{listing}</code>\n"
-            f"📦 <b>Версия:</b> <code>{version}</code>\n"
-        )
-    if info.state == "starting":
-        return (
-            "🟡 <b>СЕРВЕР ЗАПУСКАЕТСЯ...</b>\n"
-            "⏳ Сервер загружается, это может занять несколько минут.\n"
-        )
-    return "🔴 <b>СЕРВЕР ОФФЛАЙН</b>\n"
-
-
-def render_user_card(user: dict) -> str:
-    name = quote_html(user["username"] or user["first_name"] or str(user["user_id"]))
-    state = "🟢 Has access" if user["has_access"] else "🔴 No access"
-    if user["user_id"] == OWNER_ID:
-        state = "👑 <b>Owner - permanent access</b>"
-    handle = f"@<b>{quote_html(user['username'])}</b>\n" if user["username"] else ""
-    return f"👤 <b>{name}</b>\n🆔 <code>{user['user_id']}</code>\n{handle}🔑 {state}"
-
-
-async def _notify_user_privately(user_id: int, text: str) -> None:
-    if await db.get_user(user_id, user_id) is None:
-        return
     try:
-        await _bot().send_message(user_id, text)
-    except (TelegramBadRequest, TelegramNotFound):
-        pass
-
-
-async def _register_sender(message: Message) -> None:
-    user = message.from_user
-    if user is None:
-        return
-    await db.upsert_chat(message.chat.id, message.chat.title or "", message.chat.type)
-    await db.upsert_user(message.chat.id, user.id, user.username or "", user.first_name or "")
-    if user.id == OWNER_ID:
-        await db.set_access(message.chat.id, user.id, True)
-
-
-# ---------------------------------------------------------------------- #
-# chat membership tracking (chat list = groups where the bot is present)
-# ---------------------------------------------------------------------- #
-@router.my_chat_member()
-@safe_handler
-async def on_my_chat_member(update: ChatMemberUpdated) -> None:
-    if update.chat.type not in ("group", "supergroup"):
-        return
-    if update.new_chat_member.status in ("left", "kicked"):
-        await db.delete_chat(update.chat.id)
-        return
-    await db.upsert_chat(update.chat.id, update.chat.title or "", update.chat.type)
-
-
-# ---------------------------------------------------------------------- #
-# commands
-# ---------------------------------------------------------------------- #
-@router.message(CommandStart())
-@safe_handler
-async def cmd_start(message: Message) -> None:
-    await _register_sender(message)
-    user_id = message.from_user.id if message.from_user else 0
-
-    if user_id == OWNER_ID:
-        chats = [c for c in await db.list_chats() if c["type"] in ("group", "supergroup")]
-        await message.answer(
-            "🎛 <b>Owner menu</b>\nSelect a chat to manage its users.",
-            reply_markup=chats_menu_kb(chats, page=0),
-        )
-        return
-
-    if await db.has_access(message.chat.id, user_id):
-        await message.answer(
-            render_server_status(await _aternos().get_status()),
-            reply_markup=dashboard_kb(),
-        )
-    else:
-        await message.answer(
-            "⛔ <b>Access denied.</b> You cannot control this server. "
-            "Ask the owner to grant you access."
-        )
-
-
-@router.message(Command("emergency"))
-@safe_handler
-async def cmd_emergency(message: Message) -> None:
-    if message.from_user is None or message.from_user.id != OWNER_ID:
-        return
-    await message.answer(
-        "🚨 <b>Emergency Lockdown</b>\n\n"
-        "Revokes <b>access for ALL users</b> except you. "
-        "Re-grant access later from the owner menu.",
-        reply_markup=lockdown_kb(),
-    )
-
-
-@router.message(Command("setbackup"))
-@safe_handler
-async def cmd_setbackup(message: Message, command: CommandObject) -> None:
-    if message.from_user is None or message.from_user.id != OWNER_ID:
-        return
-    try:
-        hours = float((command.args or "").strip())
-    except ValueError:
-        await message.answer("Usage: <code>/setbackup 6</code>  (hours, 0.5 - 720)")
-        return
-    if not 0.5 <= hours <= 720:
-        await message.answer("⛔ Hours must be between <b>0.5</b> and <b>720</b>.")
-        return
-    await db.set_backup_hours(hours)
-    await message.answer(f"💾 Auto-backups set to every <b>{hours:g}</b> hour(s). "
-                         "Applies from the next backup cycle.")
-
-
-@router.message(Command("help"))
-@safe_handler
-async def cmd_help(message: Message) -> None:
-    await _register_sender(message)
-    if message.from_user is not None and message.from_user.id == OWNER_ID:
-        await message.answer(
-            "🎛 <b>MineOps Owner Help</b>\n\n"
-            "<b>Admin Panel</b> - /start opens the panel. Pick a chat, browse users "
-            "with ◀️/▶️ (5 per page), open a card to <b>Grant</b> or <b>Revoke</b> access. "
-            "The owner's own access is permanent and can never be revoked.\n\n"
-            "<b>Dashboard</b> - a live pinned card keeps you updated; it also starts "
-            "the server with one tap.\n\n"
-            "<b>Server Controls</b> - /run starts, the dashboard panel stops and "
-            "backs up. /setbackup <i>hours</i> changes the auto-backup interval.\n\n"
-            "<b>Emergency Lockdown</b> - /emergency instantly revokes access for ALL "
-            "users except you. Re-grant access later from the panel.\n\n"
-            "<b>Group usage</b> - members can use /run and /status in your group chats."
-        )
-        return
-    if message.chat.type in ("group", "supergroup"):
-        await message.answer(
-            "🛠 <b>MineOps Group Help</b>\n\n"
-            "<b>/run</b> - Start the Minecraft server (needs access granted "
-            "by the owner).\n"
-            "<b>/status</b> - Instantly check the current server status.\n"
-            "<b>/help</b> - Show this help.\n\n"
-            "No access yet? Ask the owner to grant you access from their "
-            "admin panel (/start in private chat)."
-        )
-        return
-    await message.answer(
-        "🤖 <b>MineOps</b> manages a Minecraft server on Aternos.\n\n"
-        "<b>/start</b> - Open the main admin panel\n"
-        "<b>/help</b> - Show help\n"
-        "<b>/emergency</b> - Owner-only lockdown\n\n"
-        "This bot works in private chat with the owner and in group chats "
-        "with /run and /status."
-    )
-
-
-@router.message(Command("status"))
-@safe_handler
-async def cmd_status(message: Message) -> None:
-    await _register_sender(message)
-    await message.answer(render_server_status(await _aternos().get_status()))
-
-
-@router.message(Command("run"))
-@safe_handler
-async def cmd_run(message: Message) -> None:
-    await _register_sender(message)
-    user_id = message.from_user.id if message.from_user else 0
-    if not await db.has_access(message.chat.id, user_id):
-        await message.answer(
-            "⛔ <b>Access denied.</b> I can't start the server for you. "
-            "Ask the owner to grant you access from their admin panel."
-        )
-        return
-    try:
-        result = await _aternos().start_server()
+        await AternosManager(owner_id).create_backup(server_id)
+        logger.info("авто-бэкап сервера %s выполнен", server_id)
     except AternosError as exc:
-        result = f"❌ {quote_html(str(exc))}"
-    await message.answer(result)
-
-
-# ---------------------------------------------------------------------- #
-# owner admin callbacks
-# ---------------------------------------------------------------------- #
-@router.callback_query(F.data.startswith(f"{ACTION_CHATS}:p:"))
-async def cb_chats_page(cb: CallbackQuery) -> None:
-    if cb.from_user.id != OWNER_ID:
-        await cb.answer("⛔ Owner only.", show_alert=True)
-        return
-    chats = await db.list_chats()
-    await cb.message.edit_text(
-        "🎛 <b>Owner menu</b>\nSelect a chat to manage its users.",
-        reply_markup=chats_menu_kb(chats, page=_parse_ints(cb.data, 1)[0]),
-    )
-    await cb.answer()
-
-
-@router.callback_query(F.data.startswith(f"{ACTION_USER_LIST}:") and F.data.contains(":p:"))
-async def cb_users_page(cb: CallbackQuery) -> None:
-    if cb.from_user.id != OWNER_ID:
-        await cb.answer("⛔ Owner only.", show_alert=True)
-        return
-    chat_id, page = _parse_ints(cb.data, 2)
-    chat = await db.get_chat(chat_id)
-    title = quote_html(chat["title"]) if chat and chat["title"] else f"chat {chat_id}"
-    users = await db.list_users(chat_id)
-    await cb.message.edit_text(
-        f"💬 <b>{title}</b> - {len(users)} user(s)",
-        reply_markup=users_kb(users, chat_id, page=page, owner_id=OWNER_ID),
-    )
-    await cb.answer()
-
-
-@router.callback_query(F.data.startswith(f"{ACTION_USER_CARD}:"))
-async def cb_user_card(cb: CallbackQuery) -> None:
-    if cb.from_user.id != OWNER_ID:
-        await cb.answer("⛔ Owner only.", show_alert=True)
-        return
-    chat_id, user_id = _parse_ints(cb.data, 2)
-    user = await db.get_user(chat_id, user_id)
-    if user is None:
-        await cb.answer("User not found.", show_alert=True)
-        return
-    await cb.message.edit_text(
-        render_user_card(user),
-        reply_markup=user_card_kb(chat_id, user_id, bool(user["has_access"]), owner_id=OWNER_ID),
-    )
-    await cb.answer()
-
-
-@router.callback_query(F.data.startswith(f"{ACTION_GRANT}:") | F.data.startswith(f"{ACTION_REVOKE}:"))
-async def cb_set_access(cb: CallbackQuery) -> None:
-    if cb.from_user.id != OWNER_ID:
-        await cb.answer("⛔ Owner only.", show_alert=True)
-        return
-    grant = cb.data.startswith(f"{ACTION_GRANT}:")
-    chat_id, user_id = _parse_ints(cb.data, 2)
-    if user_id == OWNER_ID:
-        await cb.answer("⛔ Owner access is permanent and cannot be changed.", show_alert=True)
-        return
-    await db.set_access(chat_id, user_id, grant)
-    user = await db.get_user(chat_id, user_id)
-    await cb.message.edit_text(
-        render_user_card(user) if user else "User row missing.",
-        reply_markup=user_card_kb(chat_id, user_id, grant, owner_id=OWNER_ID),
-    )
-    action = "granted" if grant else "revoked"
-    await _notify_user_privately(user_id, f"🔐 MineOps: access {action} in chat <code>{chat_id}</code>.")
-    await cb.answer(f"✅ Access {action}")
-
-
-@router.callback_query(F.data == ACTION_LOCKDOWN)
-async def cb_lockdown(cb: CallbackQuery) -> None:
-    if cb.from_user.id != OWNER_ID:
-        await cb.answer("⛔ Owner only.", show_alert=True)
-        return
-    await cb.message.edit_text(
-        "🚨 <b>Emergency Lockdown</b>\n\n"
-        "This instantly revokes <b>access for ALL users</b> except you.",
-        reply_markup=lockdown_kb(),
-    )
-    await cb.answer()
-
-
-@router.callback_query(F.data == ACTION_LOCKDOWN_CONFIRM)
-async def cb_lockdown_confirm(cb: CallbackQuery) -> None:
-    if cb.from_user.id != OWNER_ID:
-        await cb.answer("⛔ Owner only.", show_alert=True)
-        return
-    revoked = await db.revoke_all_except_owner(OWNER_ID)
-    await cb.message.edit_text(
-        f"🚨 <b>LOCKDOWN ACTIVE</b>\n\nAccess revoked for <b>{revoked}</b> user(s). "
-        "Only the owner can control the server now. Re-grant access from the owner menu.",
-        reply_markup=close_kb(),
-    )
-    await cb.answer("🔒 Lockdown engaged")
-
-
-@router.callback_query(F.data == ACTION_NOOP)
-async def cb_noop(cb: CallbackQuery) -> None:
-    await cb.answer()
-
-
-@router.callback_query(F.data == ACTION_CLOSE)
-async def cb_close(cb: CallbackQuery) -> None:
-    if cb.from_user.id != OWNER_ID:
-        await cb.answer()
-        return
-    try:
-        await cb.message.delete()
-    except (TelegramBadRequest, TelegramNotFound):
+        logger.warning("авто-бэкап сервера %s не удался: %s", server_id, exc)
         try:
-            await cb.message.edit_text("❌ Closed.", reply_markup=None)
-        except (TelegramBadRequest, TelegramNotFound):
+            await bot.send_message(owner_id, f"⚠️ <b>Авто-бэкап не удался:</b>\n{exc}")
+        except Exception:
             pass
-    await cb.answer()
 
 
-# ---------------------------------------------------------------------- #
-# server control callbacks
-# ---------------------------------------------------------------------- #
-async def _run_server_action(cb: CallbackQuery, verb: str) -> None:
-    await cb.answer(f"⏳ {verb}…")
-    try:
-        if verb == "Stop":
-            result = await _aternos().stop_server()
-        elif verb == "Backup":
-            result = await _aternos().create_backup()
-        else:
-            result = await _aternos().start_server()
-        await cb.message.answer(str(result))
-    except AternosError as exc:
-        await cb.message.answer(f"❌ {quote_html(str(exc))}")
-
-
-@router.callback_query(F.data == f"{ACTION_START}:owner")
-@router.callback_query(F.data == f"{ACTION_STOP}:owner")
-async def cb_owner_control(cb: CallbackQuery) -> None:
-    if cb.from_user.id != OWNER_ID:
-        await cb.answer("⛔ Owner only.", show_alert=True)
-        return
-    await _run_server_action(cb, "Stop" if cb.data == f"{ACTION_STOP}:owner" else "Start")
-
-
-@router.callback_query(F.data == f"{ACTION_BACKUP}:owner")
-async def cb_owner_backup(cb: CallbackQuery) -> None:
-    if cb.from_user.id != OWNER_ID:
-        await cb.answer("⛔ Owner only.", show_alert=True)
-        return
-    await _run_server_action(cb, "Backup")
-
-
-@router.callback_query(F.data == ACTION_DASH_START)
-async def cb_dash_start(cb: CallbackQuery) -> None:
-    if cb.from_user.id != OWNER_ID and not await db.has_access(cb.message.chat.id, cb.from_user.id):
-        await cb.answer("⛔ Access denied. Only users granted access by the owner can start the server.",
-                        show_alert=True)
-        return
-    await _run_server_action(cb, "Start")
-
-
-# ---------------------------------------------------------------------- #
-# background loops
-# ---------------------------------------------------------------------- #
-async def _publish_dashboard(text: str) -> None:
-    msg = await _bot().send_message(DASH_TARGET, text, reply_markup=dashboard_kb())
-    try:
-        await _bot().pin_chat_message(DASH_TARGET, msg.message_id, disable_notification=True)
-    except (TelegramBadRequest, TelegramNotFound):
-        logger.warning("could not pin dashboard")
-    await db.set_pinned_message(msg.message_id)
-
-
-async def _recreate_dashboard(text: str) -> None:
-    # Old pinned message is gone (deleted/expired): clean it up and re-pin.
-    pinned_id = await db.get_pinned_message()
-    if pinned_id is not None:
-        for attempt in (
-            lambda: _bot().unpin_chat_message(DASH_TARGET, pinned_id),
-            lambda: _bot().delete_message(DASH_TARGET, pinned_id),
-        ):
-            try:
-                await attempt()
-            except (TelegramBadRequest, TelegramNotFound):
-                pass
-        await db.unset_pinned_message()
-    await _publish_dashboard(text)
-
-
-async def dashboard_loop() -> None:
-    await asyncio.sleep(5)
-    while True:
-        try:
-            info = await _aternos().get_status()
-            text = render_server_status(info) + f"🕒 <b>Обновлено:</b> {_utc_time()} UTC"
-
-            pinned_id = await db.get_pinned_message()
-            if pinned_id is None:
-                await _publish_dashboard(text)
-            else:
-                try:
-                    await _bot().edit_message_text(
-                        text, chat_id=DASH_TARGET, message_id=pinned_id, reply_markup=dashboard_kb()
-                    )
-                except TelegramBadRequest as exc:
-                    if "message is not modified" not in str(exc):
-                        logger.warning("dashboard edit failed (%s); recreating", exc)
-                        await _recreate_dashboard(text)
-                except TelegramNotFound:
-                    await _recreate_dashboard(text)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("dashboard loop error")
-        await asyncio.sleep(UPDATE_SECONDS)
-
-
-async def backup_loop() -> None:
-    await asyncio.sleep(20)
-    while True:
-        await asyncio.sleep(max(await db.get_backup_hours(), 0.5) * 3600)
-        try:
-            result = await _aternos().create_backup()
-            await _bot().send_message(OWNER_ID, f"💾 <b>Backup complete</b>\n{quote_html(result)}")
-        except AternosError as exc:
-            logger.warning("automated backup failed: %s", exc)
-            await _bot().send_message(OWNER_ID, f"⚠️ <b>Backup failed</b>\n{quote_html(str(exc))}")
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("automated backup failed")
-            await _bot().send_message(OWNER_ID, "⚠️ <b>Backup failed</b> with an unexpected error.")
-
-
-# ---------------------------------------------------------------------- #
-# lifecycle
-# ---------------------------------------------------------------------- #
-async def _on_startup() -> None:
-    await db.init()
-    if await db.get_setting("backup_hours") is None:
-        await db.set_backup_hours(float(os.getenv("DEFAULT_BACKUP_HOURS", "24")))
-    _tasks.append(asyncio.create_task(dashboard_loop()))
-    _tasks.append(asyncio.create_task(backup_loop()))
-
-    private_commands = [
-        BotCommand(command="start", description="Main Admin Panel"),
-        BotCommand(command="help", description="Help & Command List"),
-        BotCommand(command="emergency", description="Revoke all non-owner access"),
-    ]
-    group_commands = [
-        BotCommand(command="run", description="Start the Minecraft server"),
-        BotCommand(command="status", description="Check current server status"),
-        BotCommand(command="help", description="Show group help"),
-    ]
-    await _bot().set_my_commands(private_commands, scope=BotCommandScopeAllPrivateChats())
-    await _bot().set_my_commands(group_commands, scope=BotCommandScopeAllGroupChats())
-    await _bot().set_my_commands(private_commands, scope=BotCommandScopeDefault())
-
-    await _bot().send_message(OWNER_ID, "🚀 <b>MineOps online.</b>")
-
-
-async def _on_shutdown() -> None:
-    for task in _tasks:
-        task.cancel()
-    await asyncio.gather(*_tasks, return_exceptions=True)
-    if aternos is not None:
-        await aternos.shutdown()
-    await db.close()
+async def reschedule_backup_jobs(scheduler: AsyncIOScheduler, bot: Bot) -> None:
+    """Пересоздаёт авто-бэкапы по интервалам серверов (после настроек)."""
+    for job in list(scheduler.get_jobs()):
+        if job.id.startswith(BACKUP_JOB_PREFIX):
+            job.remove()
+    for owner in await database.get_all_owners():
+        for server in await database.get_active_servers_by_owner(owner["user_id"]):
+            hours = int(server["auto_backup_h"] or 0)
+            if hours <= 0:
+                continue
+            scheduler.add_job(
+                backup_job,
+                IntervalTrigger(hours=hours),
+                args=[bot, owner["user_id"], server["id"]],
+                id=f"{BACKUP_JOB_PREFIX}{server['id']}",
+                replace_existing=True,
+                max_instances=1,
+            )
 
 
 async def main() -> None:
-    global bot, aternos
-
-    if not BOT_TOKEN or OWNER_ID <= 0:
-        raise SystemExit("BOT_TOKEN and OWNER_ID must be configured in .env")
-
-    bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-    aternos = AternosService(
-        username=os.getenv("ATERNOS_USERNAME", ""),
-        password=os.getenv("ATERNOS_PASSWORD", ""),
-        session=os.getenv("ATERNOS_SESSION") or None,
-        server_address=os.getenv("SERVER_ADDRESS", "localhost"),
-        server_port=int(os.getenv("SERVER_PORT", "25565")),
-    )
-
+    """Главная корутина: БД -> бот -> мидлвари -> роутеры -> шедулер -> поллинг."""
+    bot = Bot(config.BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
     dp = Dispatcher()
-    dp.include_router(router)
-    dp.startup.register(_on_startup)
-    dp.shutdown.register(_on_shutdown)
 
-    await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+    dp.message.middleware(FirewallMiddleware())
+    dp.message.middleware(RegisterMiddleware())
+    dp.include_routers(onboarding.router, admin.router, group.router)
+
+    scheduler = AsyncIOScheduler()
+
+    @dp.error()
+    async def global_error_handler(event: ErrorEvent) -> None:
+        """Логирует ошибки и шлёт алерт суперадмину (не роняет бота)."""
+        exc = event.exception
+        logger.exception("глобальная ошибка: %s", exc)
+        try:
+            await bot.send_message(
+                config.SUPER_ADMIN_ID,
+                f"🚨 <b>Глобальная ошибка бота:</b>\n"
+                f"<pre>{quote_html(str(exc)[:1500])}</pre>",
+            )
+        except Exception:
+            pass
+
+    @dp.startup()
+    async def on_startup(bot: Bot, **kwargs) -> None:
+        """Инициализация при старте: БД, команды, шедулер (aiogram 3.30 API)."""
+        global _scheduler
+        logger.info("инициализация БД...")
+        await database.init_db()
+        logger.info("БД готова (схема v%s)", database.SCHEMA_VERSION)
+
+        await bot.set_my_commands(
+            [
+                BotCommand(command="start", description="Панель / Онбординг"),
+                BotCommand(command="panel", description="Панель владельца"),
+                BotCommand(command="help", description="Помощь"),
+                BotCommand(command="status", description="Обновить дашборд (в чате)"),
+                BotCommand(command="link", description="Привязать чат и серверы (владелец)"),
+                BotCommand(command="unlink", description="Отвязать чат (владелец)"),
+                BotCommand(command="emergency", description="Локдаун (владелец)"),
+                BotCommand(command="set_session", description="Обновить куку (владелец)"),
+            ]
+        )
+
+        scheduler.add_job(
+            update_dashboards_job,
+            IntervalTrigger(seconds=UPDATE_INTERVAL),
+            args=[bot],
+            id="dashboards",
+            replace_existing=True,
+            max_instances=1,
+        )
+        await reschedule_backup_jobs(scheduler, bot)
+        _scheduler = scheduler
+        scheduler.start()
+        logger.info("scheduler: дашборды каждые %s c, авто-бэкапы по настройкам", UPDATE_INTERVAL)
+
+    @dp.shutdown()
+    async def on_shutdown(bot: Bot, **kwargs) -> None:
+        scheduler.shutdown(wait=False)
+        await database.close_db()
+        logger.info("бот остановлен")
+
+    try:
+        await dp.start_polling(bot)
+    finally:
+        await bot.session.close()
 
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        pass
+    asyncio.run(main())

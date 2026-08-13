@@ -1,0 +1,18 @@
+# --- secrets ---
+.env
+
+# --- runtime data (сохраняется через volume ./data:/app/data) ---
+data/
+
+# --- vcs ---
+.git/
+.gitignore
+
+# --- python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# --- logs ---
+*.log

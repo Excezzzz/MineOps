@@ -1,0 +1,246 @@
+"""Клавиатуры личной панели владельца (DM-чат с ботом)."""
+
+from __future__ import annotations
+
+from aiogram.filters.callback_data import CallbackData
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+# Панель владельца.
+class PanelCb(CallbackData, prefix="panel"):
+    action: str  # "servers" | "chats" | "settings" | "audit" | "back" | "add_server"
+
+# Карточка сервера в панели.
+class PanelServerCb(CallbackData, prefix="psrv"):
+    server_id: int
+
+# Действия над сервером из панели.
+class PanelActionCb(CallbackData, prefix="pact"):
+    server_id: int
+    action: str  # "start" | "stop" | "backup" | "delete" | "confirm"
+
+# Карточка чата в панели.
+class PanelChatCb(CallbackData, prefix="pchat"):
+    chat_id: int
+    action: str  # "select" | "unlink" | "users"
+
+# Пагинация участников чата.
+class UsersPageCb(CallbackData, prefix="upage"):
+    chat_id: int
+    page: int
+
+# Интервал авто-бэкапа (применяется ко ВСЕМ серверам владельца).
+class BackupIntervalCb(CallbackData, prefix="bint"):
+    hours: int  # 0 — выключить
+
+# Настройки владельца.
+class OwnerSettingsCb(CallbackData, prefix="oset"):
+    action: str     # "auto_confirm" | "lockdown"
+    enabled: bool   # целевое значение (вкл/выкл)
+
+
+def get_owner_panel_kb() -> InlineKeyboardMarkup:
+    """Главное меню панели владельца."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🖥 Серверы", callback_data=PanelCb(action="servers").pack())],
+            [InlineKeyboardButton(text="💬 Чаты", callback_data=PanelCb(action="chats").pack())],
+            [InlineKeyboardButton(text="⚙️ Настройки", callback_data=PanelCb(action="settings").pack())],
+            [InlineKeyboardButton(text="📋 Аудит", callback_data=PanelCb(action="audit").pack())],
+        ]
+    )
+
+
+def get_owner_servers_kb(servers: list[dict]) -> InlineKeyboardMarkup:
+    """Список серверов владельца (кнопка = карточка сервера)."""
+    buttons: list[list[InlineKeyboardButton]] = [
+        [
+            InlineKeyboardButton(
+                text=f"🖥 {s['display_name']}",
+                callback_data=PanelServerCb(server_id=s["id"]).pack(),
+            )
+        ]
+        for s in servers
+    ]
+    if not servers:
+        buttons.append([InlineKeyboardButton(text="(серверов нет)", callback_data="noop")])
+    buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data=PanelCb(action="back").pack())])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_server_card_kb(server_id: int, is_online: bool) -> InlineKeyboardMarkup:
+    """Карточка сервера: действия + удаление + возврат к списку."""
+    action_row = []
+    if is_online:
+        action_row.append(
+            InlineKeyboardButton(
+                text="⏹ Стоп", callback_data=PanelActionCb(server_id=server_id, action="stop").pack()
+            )
+        )
+        action_row.append(
+            InlineKeyboardButton(
+                text="📦 Бэкап",
+                callback_data=PanelActionCb(server_id=server_id, action="backup").pack(),
+            )
+        )
+    else:
+        action_row.append(
+            InlineKeyboardButton(
+                text="▶️ Старт",
+                callback_data=PanelActionCb(server_id=server_id, action="start").pack(),
+            )
+        )
+        action_row.append(
+            InlineKeyboardButton(
+                text="✅ Подтвердить",
+                callback_data=PanelActionCb(server_id=server_id, action="confirm").pack(),
+            )
+        )
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            action_row,
+            [
+                InlineKeyboardButton(
+                    text="🗑 Удалить",
+                    callback_data=PanelActionCb(server_id=server_id, action="delete").pack(),
+                ),
+                InlineKeyboardButton(
+                    text="🔙 К серверам",
+                    callback_data=PanelCb(action="servers").pack(),
+                ),
+            ],
+        ]
+    )
+
+
+def get_owner_chats_kb(chats: list[dict]) -> InlineKeyboardMarkup:
+    """Список чатов владельца (кнопка = карточка чата)."""
+    buttons: list[list[InlineKeyboardButton]] = [
+        [
+            InlineKeyboardButton(
+                text=f"💬 {chat['title'] or chat['chat_id']}",
+                callback_data=PanelChatCb(chat_id=chat["chat_id"], action="select").pack(),
+            )
+        ]
+        for chat in chats
+    ]
+    if not chats:
+        buttons.append([InlineKeyboardButton(text="(чатов нет)", callback_data="noop")])
+    buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data=PanelCb(action="back").pack())])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_chat_card_kb(chat_id: int) -> InlineKeyboardMarkup:
+    """Карточка чата: участники, отвязка, возврат."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="👥 Участники",
+                    callback_data=PanelChatCb(chat_id=chat_id, action="users").pack(),
+                ),
+                InlineKeyboardButton(
+                    text="🔗 Серверы чата",
+                    callback_data=PanelChatCb(chat_id=chat_id, action="select").pack(),
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🗑 Отвязать чат",
+                    callback_data=PanelChatCb(chat_id=chat_id, action="unlink").pack(),
+                ),
+                InlineKeyboardButton(
+                    text="🔙 К чатам",
+                    callback_data=PanelCb(action="chats").pack(),
+                ),
+            ],
+        ]
+    )
+
+
+def get_users_page_kb(chat_id: int, page: int, total: int, limit: int) -> InlineKeyboardMarkup:
+    """Пагинация участников чата (limit на страницу)."""
+    pages = max((total + limit - 1) // limit, 1)
+    nav: list[InlineKeyboardButton] = []
+    if page > 0:
+        nav.append(
+            InlineKeyboardButton(
+                text="⬅️ Назад", callback_data=UsersPageCb(chat_id=chat_id, page=page - 1).pack()
+            )
+        )
+    nav.append(InlineKeyboardButton(text=f"{page + 1}/{pages}", callback_data="noop"))
+    if page + 1 < pages:
+        nav.append(
+            InlineKeyboardButton(
+                text="➡️ Вперёд", callback_data=UsersPageCb(chat_id=chat_id, page=page + 1).pack()
+            )
+        )
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            nav,
+            [
+                InlineKeyboardButton(
+                    text="🔙 К чату",
+                    callback_data=PanelChatCb(chat_id=chat_id, action="select").pack(),
+                )
+            ],
+        ]
+    )
+
+
+def get_owner_settings_kb(
+    lockdown: bool, auto_confirm: bool, backup_hours: int
+) -> InlineKeyboardMarkup:
+    """Настройки владельца (применяются ко всем его серверам)."""
+
+    def backup_label(hours: int) -> str:
+        base = "выкл" if hours == 0 else f"{hours}ч"
+        mark = " — ТЕКУЩИЙ" if backup_hours == hours else ""
+        return f"⏱ Бэкап: {base}{mark}"
+
+    def confirm_label(enabled: bool) -> str:
+        mark = " — ТЕКУЩИЙ" if enabled == auto_confirm else ""
+        return f"✅ Автоподтверждение: {'вкл' if enabled else 'выкл'}{mark}"
+
+    def lockdown_label(enabled: bool) -> str:
+        mark = " — ТЕКУЩИЙ" if enabled == lockdown else ""
+        return f"🔒 Локдаун: {'вкл' if enabled else 'выкл'}{mark}"
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=backup_label(0), callback_data=BackupIntervalCb(hours=0).pack()),
+                InlineKeyboardButton(text=backup_label(12), callback_data=BackupIntervalCb(hours=12).pack()),
+                InlineKeyboardButton(text=backup_label(24), callback_data=BackupIntervalCb(hours=24).pack()),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=confirm_label(True),
+                    callback_data=OwnerSettingsCb(action="auto_confirm", enabled=True).pack(),
+                ),
+                InlineKeyboardButton(
+                    text=confirm_label(False),
+                    callback_data=OwnerSettingsCb(action="auto_confirm", enabled=False).pack(),
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=lockdown_label(True),
+                    callback_data=OwnerSettingsCb(action="lockdown", enabled=True).pack(),
+                ),
+                InlineKeyboardButton(
+                    text=lockdown_label(False),
+                    callback_data=OwnerSettingsCb(action="lockdown", enabled=False).pack(),
+                ),
+            ],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data=PanelCb(action="back").pack())],
+        ]
+    )
+
+
+def get_owner_audit_kb() -> InlineKeyboardMarkup:
+    """Навигация журнала аудита."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Назад", callback_data=PanelCb(action="back").pack())]
+        ]
+    )
