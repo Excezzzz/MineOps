@@ -360,13 +360,6 @@ class Database:
         )
         return [dict(row) for row in await cur.fetchall()]
 
-    async def get_servers_with_backup(self) -> List[dict]:
-        """Активные серверы с включённым авто-бэкапом (для шедулера)."""
-        cur = await self.conn.execute(
-            "SELECT * FROM servers WHERE is_active = 1 AND auto_backup_h > 0"
-        )
-        return [dict(row) for row in await cur.fetchall()]
-
     async def get_servers_count(self, owner_id: int) -> int:
         cur = await self.conn.execute(
             "SELECT COUNT(*) AS n FROM servers WHERE owner_id = ?", (owner_id,)
@@ -384,12 +377,6 @@ class Database:
     async def update_server_name(self, server_id: int, display_name: str) -> None:
         await self.conn.execute(
             "UPDATE servers SET display_name = ? WHERE id = ?", (display_name, server_id)
-        )
-        await self.conn.commit()
-
-    async def set_server_backup_interval(self, server_id: int, hours: int) -> None:
-        await self.conn.execute(
-            "UPDATE servers SET auto_backup_h = ? WHERE id = ?", (hours, server_id)
         )
         await self.conn.commit()
 
@@ -730,11 +717,6 @@ async def get_active_servers_by_owner(owner_id: int) -> List[dict]:
     return await get_db().get_active_servers_by_owner(owner_id)
 
 
-async def get_servers_with_backup() -> List[dict]:
-    """Активные серверы с авто-бэкапом (обёртка)."""
-    return await get_db().get_servers_with_backup()
-
-
 async def set_server_active(server_id: int, active: bool) -> None:
     """Включает/выключает сервер (обёртка)."""
     await get_db().set_server_active(server_id, active)
@@ -745,13 +727,8 @@ async def update_server_name(server_id: int, display_name: str) -> None:
     await get_db().update_server_name(server_id, display_name)
 
 
-async def set_server_backup_interval(server_id: int, hours: int) -> None:
-    """Задаёт интервал авто-бэкапа в часах (обёртка)."""
-    await get_db().set_server_backup_interval(server_id, hours)
-
-
 async def set_server_auto_confirm(server_id: int, enabled: bool) -> None:
-    """Включает/выключает автоподтверждение очереди (обёртка)."""
+    """Задаёт автоподтверждение запуска (обёртка)."""
     await get_db().set_server_auto_confirm(server_id, enabled)
 
 

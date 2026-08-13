@@ -1,9 +1,9 @@
 """Групповой роутер (multi-tenant): дашборд, кнопки серверов, /link, доступ.
 
-- /link — владелец привязывает чат и выбирает серверы (дашборд закрепится);
+- /link — владелец привязывает чат и ВСЕ свои серверы (дашборд закрепится);
 - /unlink — владелец отвязывает чат (дашборд удаляется);
 - /status — ручное обновление дашборда (владелец и участники с доступом);
-- кнопки дашборда: старт/стоп/бэкап/подтверждение очереди (ServerCb);
+- кнопки дашборда: старт/стоп/подтверждение очереди (ServerCb);
 - запрос доступа участника уходит ВЛАДЕЛЬЦУ ЧАТА (ReqAccessCb/ApproveAccessCb);
 - /help — динамическая справка по роли.
 
@@ -26,13 +26,12 @@ import database
 from filters.access import HasAccessFilter, IsOwnerFilter
 from keyboards.group_kb import (
     ApproveAccessCb,
-    LinkServerCb,
     ReqAccessCb,
     ServerCb,
     get_approve_access_kb,
-    get_link_kb,
+    get_dashboard_kb,
 )
-from services import dashboard
+from services import dashboard, mcsrvstat
 from services.aternos_api import AternosError, AternosManager
 from services.queue_watcher import start_queue_watcher
 
@@ -50,9 +49,6 @@ async def _safe_edit_text(message, text: str, reply_markup=None) -> None:
 
 ACCESS_REQUEST_COOLDOWN = 300  # сек: не чаще одного запроса доступа в 5 минут
 _last_access_request: dict[int, float] = {}
-
-# Черновик привязки чата: chat_id -> выбранные server_id (до нажатия «Готово»).
-_link_selection: dict[int, set[int]] = {}
 
 
 async def _toast(message: Message, text: str, seconds: int = 3) -> None:
@@ -95,109 +91,53 @@ async def _require_chat_permission(callback_query: CallbackQuery) -> tuple | Non
 # ---------------------------------------------------------------------- #
 @router.message(F.chat.type.in_({"group", "supergroup"}), Command("link"))
 async def link_command(message: Message) -> None:
-    """Привязка чата: пикер серверов владельца (если чат ещё не привязан)."""
+    """Привязка чата: регистрирует чат, привязывает ВСЕ серверы владельца
+    и сразу создаёт и закрепляет дашборд (без пикера серверов)."""
     user = message.from_user
     if user is None:
         return
     if not await database.is_owner(user.id):
-        await message.answer("❌ Только владелец (после /start в ЛС с ботом) может привязать чат.")
+        await message.answer("❌ Ты не владелец. Пройди онбординг в ЛС с ботом (/start).")
         return
 
-    chat = await database.get_chat(int(message.chat.id))
+    chat_id = int(message.chat.id)
+    chat = await database.get_chat(chat_id)
     if chat and chat["owner_id"] != user.id:
         await message.answer("❌ Этот чат уже привязан к другому владельцу.")
         return
 
-    servers = await database.get_active_servers_by_owner(user.id)
+    await database.add_chat(chat_id, user.id, message.chat.title or "")
+
+    servers = await database.get_servers_by_owner(user.id)
     if not servers:
-        await message.answer("У вас нет серверов. Сначала пройдите онбординг: /start в ЛС с ботом.")
+        await message.answer("❌ У тебя нет серверов, добавь через ЛС с ботом (/start).")
         return
 
-    chat_id = int(message.chat.id)
-
-    if len(servers) == 1:
-        # Один сервер — привязываем сразу, без пикера, и создаём дашборд.
-        if not chat:
-            await database.add_chat(chat_id, user.id, message.chat.title or "")
-        await database.link_server_to_chat(chat_id, servers[0]["id"])
-        await database.log_action(
-            user.id, "chat_link", f"chat {chat_id} (авто)", chat_id=chat_id
-        )
-        logger.info("чат %s: авто-привязка сервера %s", chat_id, servers[0]["id"])
-        await message.answer(
-            f"✅ Чат привязан к серверу {servers[0]['display_name']} — создаю дашборд..."
-        )
-        await dashboard._update_chat_dashboard(message.bot, chat_id)
-        return
-
-    _link_selection[chat_id] = set()
-    await message.answer(
-        "🔗 Выберите серверы для дашборда этого чата:",
-        reply_markup=get_link_kb(servers, set()),
+    for server in servers:
+        await database.link_server_to_chat(chat_id, server["id"])
+    await database.log_action(user.id, "chat_link", f"chat {chat_id}", chat_id=chat_id)
+    logger.info(
+        "чат %s: владелец %s привязал серверы %s",
+        chat_id, user.id, [s["id"] for s in servers],
     )
 
-
-@router.callback_query(LinkServerCb.filter())
-async def on_link_callback(
-    callback_query: CallbackQuery, callback_data: LinkServerCb
-) -> None:
-    """Пикер серверов при /link: toggle/готово/отмена."""
-    user = callback_query.from_user
-    if user is None:
-        return
-    chat_id = int(callback_query.message.chat.id)
-
-    owner = await database.get_chat_owner(chat_id)
-    if owner and owner["user_id"] != user.id:
-        await callback_query.answer("Этот чат принадлежит другому владельцу.")
-        return
-
-    servers = await database.get_active_servers_by_owner(user.id)
-    if not servers:
-        await callback_query.answer("У вас нет серверов.")
-        return
-
-    selected = _link_selection.setdefault(chat_id, set())
-
-    if callback_data.action == "toggle":
-        sid = int(callback_data.server_id)
-        if sid in selected:
-            selected.discard(sid)
-        else:
-            selected.add(sid)
-        await _safe_edit_text(
-            callback_query.message,
-            "🔗 Выберите серверы для дашборда этого чата:",
-            get_link_kb(servers, selected),
-        )
-        await callback_query.answer()
-        return
-
-    if callback_data.action == "done":
-        if not selected:
-            await callback_query.answer("Выберите хотя бы один сервер.")
-            return
-        _link_selection.pop(chat_id, None)
-        if not owner:
-            await database.add_chat(chat_id, user.id, callback_query.message.chat.title or "")
-        for sid in selected:
-            await database.link_server_to_chat(chat_id, sid)
-        await database.log_action(user.id, "chat_link", f"chat {chat_id}", chat_id=chat_id)
-        try:
-            await callback_query.message.delete()
-        except Exception:
-            pass
-        await callback_query.answer("✅ Чат привязан!")
-        await dashboard._update_chat_dashboard(callback_query.bot, chat_id)
-        return
-
-    # cancel
-    _link_selection.pop(chat_id, None)
+    # Сразу создаём дашборд: статусы -> текст -> отправка -> закреп -> сохранение.
+    bound = await database.get_chat_servers(chat_id)
+    statuses = await mcsrvstat.get_servers_status(bound)
+    merged = [{**s, **statuses.get(s["server_ip"], {})} for s in bound]
+    dashboard_text = dashboard.format_dashboard_text(merged)
+    kb = get_dashboard_kb(merged, chat_id)
+    msg = await message.answer(dashboard_text, reply_markup=kb)
     try:
-        await callback_query.message.delete()
-    except Exception:
-        pass
-    await callback_query.answer()
+        await message.bot.pin_chat_message(
+            chat_id=chat_id, message_id=msg.message_id, disable_notification=True
+        )
+    except TelegramBadRequest as exc:
+        logger.warning("link: закрепить дашборд не удалось: %s", exc)
+    await database.set_chat_pinned_msg(chat_id, msg.message_id)
+    logger.info("чат %s: дашборд создан и закреплён (msg %s)", chat_id, msg.message_id)
+
+    await message.answer("✅ Чат привязан, серверы подключены, дашборд закреплён")
 
 
 @router.message(F.chat.type.in_({"group", "supergroup"}), Command("unlink"), IsOwnerFilter())
@@ -243,7 +183,7 @@ async def help_command(message: Message) -> None:
             "/status — обновить дашборд вручную\n"
             "/emergency — локдаун (в ЛС с ботом)\n\n"
             "<b>Кнопки дашборда:</b>\n"
-            "▶️ Старт · ⏹ Стоп · 📦 Бэкап · ✅ Подтвердить очередь"
+            "▶️ Старт · ⏹ Стоп · ✅ Подтвердить очередь"
         )
     else:
         await message.answer(
@@ -255,7 +195,7 @@ async def help_command(message: Message) -> None:
 
 
 # ---------------------------------------------------------------------- #
-# Кнопки дашборда: старт/стоп/бэкап/подтверждение
+# Кнопки дашборда: старт/стоп/подтверждение
 # ---------------------------------------------------------------------- #
 @router.callback_query(ServerCb.filter())
 async def on_server_action(callback_query: CallbackQuery, callback_data: ServerCb) -> None:
@@ -292,9 +232,6 @@ async def on_server_action(callback_query: CallbackQuery, callback_data: ServerC
             dashboard.clear_queue_position(server_id)
             await callback_query.answer(text)
             await dashboard.update_chats_dashboards(callback_query.bot, [chat_id])
-        elif action == "backup":
-            text = await manager.create_backup(server_id)
-            await callback_query.answer(text)
         elif action == "confirm":
             await manager.confirm_server(server_id)
             dashboard.clear_queue_position(server_id)

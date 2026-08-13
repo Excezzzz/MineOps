@@ -16,7 +16,7 @@ class PanelServerCb(CallbackData, prefix="psrv"):
 # Действия над сервером из панели.
 class PanelActionCb(CallbackData, prefix="pact"):
     server_id: int
-    action: str  # "start" | "stop" | "backup" | "delete" | "confirm"
+    action: str  # "start" | "stop" | "delete" | "confirm"
 
 # Карточка чата в панели.
 class PanelChatCb(CallbackData, prefix="pchat"):
@@ -27,10 +27,6 @@ class PanelChatCb(CallbackData, prefix="pchat"):
 class UsersPageCb(CallbackData, prefix="upage"):
     chat_id: int
     page: int
-
-# Интервал авто-бэкапа (применяется ко ВСЕМ серверам владельца).
-class BackupIntervalCb(CallbackData, prefix="bint"):
-    hours: int  # 0 — выключить
 
 # Настройки владельца.
 class OwnerSettingsCb(CallbackData, prefix="oset"):
@@ -74,12 +70,6 @@ def get_server_card_kb(server_id: int, is_online: bool) -> InlineKeyboardMarkup:
         action_row.append(
             InlineKeyboardButton(
                 text="⏹ Стоп", callback_data=PanelActionCb(server_id=server_id, action="stop").pack()
-            )
-        )
-        action_row.append(
-            InlineKeyboardButton(
-                text="📦 Бэкап",
-                callback_data=PanelActionCb(server_id=server_id, action="backup").pack(),
             )
         )
     else:
@@ -187,52 +177,26 @@ def get_users_page_kb(chat_id: int, page: int, total: int, limit: int) -> Inline
     )
 
 
-def get_owner_settings_kb(
-    lockdown: bool, auto_confirm: bool, backup_hours: int
-) -> InlineKeyboardMarkup:
-    """Настройки владельца (применяются ко всем его серверам)."""
+def get_owner_settings_kb(lockdown: bool, auto_confirm: bool) -> InlineKeyboardMarkup:
+    """Настройки владельца (применяются ко всем его серверам).
 
-    def backup_label(hours: int) -> str:
-        base = "выкл" if hours == 0 else f"{hours}ч"
-        mark = " — ТЕКУЩИЙ" if backup_hours == hours else ""
-        return f"⏱ Бэкап: {base}{mark}"
-
-    def confirm_label(enabled: bool) -> str:
-        mark = " — ТЕКУЩИЙ" if enabled == auto_confirm else ""
-        return f"✅ Автоподтверждение: {'вкл' if enabled else 'выкл'}{mark}"
-
-    def lockdown_label(enabled: bool) -> str:
-        mark = " — ТЕКУЩИЙ" if enabled == lockdown else ""
-        return f"🔒 Локдаун: {'вкл' if enabled else 'выкл'}{mark}"
-
+    Короткие кнопки-переключатели по одной на строку (текст не обрезается).
+    """
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text=backup_label(0), callback_data=BackupIntervalCb(hours=0).pack()),
-                InlineKeyboardButton(text=backup_label(12), callback_data=BackupIntervalCb(hours=12).pack()),
-                InlineKeyboardButton(text=backup_label(24), callback_data=BackupIntervalCb(hours=24).pack()),
+                InlineKeyboardButton(
+                    text="✅ Автоподтверждение" if auto_confirm else "❌ Автоподтверждение",
+                    callback_data=OwnerSettingsCb(action="auto_confirm", enabled=not auto_confirm).pack(),
+                )
             ],
             [
                 InlineKeyboardButton(
-                    text=confirm_label(True),
-                    callback_data=OwnerSettingsCb(action="auto_confirm", enabled=True).pack(),
-                ),
-                InlineKeyboardButton(
-                    text=confirm_label(False),
-                    callback_data=OwnerSettingsCb(action="auto_confirm", enabled=False).pack(),
-                ),
+                    text="🔒 Локдаун вкл" if lockdown else "🔓 Локдаун выкл",
+                    callback_data=OwnerSettingsCb(action="lockdown", enabled=not lockdown).pack(),
+                )
             ],
-            [
-                InlineKeyboardButton(
-                    text=lockdown_label(True),
-                    callback_data=OwnerSettingsCb(action="lockdown", enabled=True).pack(),
-                ),
-                InlineKeyboardButton(
-                    text=lockdown_label(False),
-                    callback_data=OwnerSettingsCb(action="lockdown", enabled=False).pack(),
-                ),
-            ],
-            [InlineKeyboardButton(text="🔙 Назад", callback_data=PanelCb(action="back").pack())],
+            [InlineKeyboardButton(text="↩️ Назад", callback_data=PanelCb(action="back").pack())],
         ]
     )
 

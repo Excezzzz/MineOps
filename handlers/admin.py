@@ -7,9 +7,9 @@
 /announce — рассылка суперадмина всем владельцам.
 
 Панель владельца:
-  * Серверы — карточки с действиями (старт/стоп/бэкап/подтверждение/удаление);
+  * Серверы — карточки с действиями (старт/стоп/подтверждение/удаление);
   * Чаты — карточки чатов, список участников с пагинацией, отвязка;
-  * Настройки — авто-бэкап (все серверы), автоподтверждение, lockdown;
+  * Настройки — автоподтверждение, lockdown;
   * Аудит — последние действия владельца.
 """
 
@@ -27,7 +27,6 @@ import database
 from config import config
 from filters.access import IsSuperAdminFilter
 from keyboards.admin_kb import (
-    BackupIntervalCb,
     OwnerSettingsCb,
     PanelActionCb,
     PanelCb,
@@ -134,14 +133,11 @@ async def on_panel(callback_query: CallbackQuery, callback_data: PanelCb) -> Non
     elif action == "settings":
         owner = await database.get_owner(user.id)
         servers = await database.get_active_servers_by_owner(user.id)
-        backup_hours = int(servers[0]["auto_backup_h"] or 0) if servers else 0
         auto_confirm = bool(servers[0]["auto_confirm"]) if servers else False
         await _safe_edit_text(
             callback_query.message,
             "⚙️ <b>Настройки</b> (применяются ко всем серверам):",
-            get_owner_settings_kb(
-                bool(owner["lockdown_mode"]), auto_confirm, backup_hours
-            ),
+            get_owner_settings_kb(bool(owner["lockdown_mode"]), auto_confirm),
         )
     elif action == "audit":
         logs = await database.get_audit_log(user.id, limit=10)
@@ -185,9 +181,8 @@ async def on_panel_server(callback_query: CallbackQuery, callback_data: PanelSer
         f"🌐 IP: {quote_html(server['server_ip'] or '—')}\n"
         f"{state_text} · "
         f"{status['players_online']}/{status['players_max']} игроков\n"
-        f"⏱ Авто-бэкап: {server['auto_backup_h'] or 0} ч\n"
         f"✅ Автоподтверждение: {'вкл' if server['auto_confirm'] else 'выкл'}\n\n"
-        f"<i>Настройки бэкапа и автоподтверждения — в разделе «Настройки».</i>",
+        f"<i>Настройка автоподтверждения — в разделе «Настройки».</i>",
         get_server_card_kb(server["id"], is_online),
     )
     await callback_query.answer()
@@ -224,9 +219,6 @@ async def on_panel_action(callback_query: CallbackQuery, callback_data: PanelAct
                 callback_query.bot,
                 [int(c["chat_id"]) for c in await database.get_chats_by_owner(user.id)],
             )
-        elif action == "backup":
-            text = await manager.create_backup(server["id"])
-            await callback_query.answer(text)
         elif action == "confirm":
             await manager.confirm_server(server["id"])
             dashboard.clear_queue_position(server["id"])
@@ -336,31 +328,6 @@ async def _show_users_page(callback_query: CallbackQuery, owner_id: int, chat_id
 # ---------------------------------------------------------------------- #
 # Панель: настройки
 # ---------------------------------------------------------------------- #
-@router.callback_query(BackupIntervalCb.filter())
-async def on_backup_interval(callback_query: CallbackQuery, callback_data: BackupIntervalCb) -> None:
-    """Авто-бэкап для всех серверов владельца + пересоздание джобов."""
-    user = callback_query.from_user
-    if user is None or not await _require_owner(callback_query, user.id):
-        return
-    servers = await database.get_active_servers_by_owner(user.id)
-    for server in servers:
-        await database.set_server_backup_interval(server["id"], int(callback_data.hours))
-    await database.log_action(
-        user.id, "backup_interval", f"все серверы: {callback_data.hours} ч"
-    )
-    await callback_query.answer(f"Авто-бэкап: {'выключен' if callback_data.hours == 0 else f'каждые {callback_data.hours} ч'}")
-    # Пересоздаём расписание (ленивый импорт — main уже загружен).
-    try:
-        from main import get_scheduler, reschedule_backup_jobs
-
-        scheduler = get_scheduler()
-        if scheduler is not None:
-            await reschedule_backup_jobs(scheduler, callback_query.bot)
-    except Exception as exc:
-        logger.warning("reschedule после смены интервала не удался: %s", exc)
-    await _refresh_settings(callback_query, user.id)
-
-
 @router.callback_query(OwnerSettingsCb.filter())
 async def on_owner_settings(callback_query: CallbackQuery, callback_data: OwnerSettingsCb) -> None:
     user = callback_query.from_user
@@ -391,14 +358,11 @@ async def on_owner_settings(callback_query: CallbackQuery, callback_data: OwnerS
 async def _refresh_settings(callback_query: CallbackQuery, owner_id: int) -> None:
     owner = await database.get_owner(owner_id)
     servers = await database.get_active_servers_by_owner(owner_id)
-    backup_hours = int(servers[0]["auto_backup_h"] or 0) if servers else 0
     auto_confirm = bool(servers[0]["auto_confirm"]) if servers else False
     await _safe_edit_text(
         callback_query.message,
         "⚙️ <b>Настройки</b> (применяются ко всем серверам):",
-        get_owner_settings_kb(
-            bool(owner["lockdown_mode"]), auto_confirm, backup_hours
-        ),
+        get_owner_settings_kb(bool(owner["lockdown_mode"]), auto_confirm),
     )
 
 

@@ -3,7 +3,7 @@
 Архитектурные правила:
   * python-aternos — СИНХРОННАЯ библиотека, все вызовы обёрнуты в
     asyncio.to_thread() и сериализованы per-owner блокировкой;
-  * python-aternos используется ТОЛЬКО для действий (start, stop, backup,
+  * python-aternos используется ТОЛЬКО для действий (start, stop,
     confirm, list_servers) и проверки очереди запуска — НИКОГДА для
     регулярного polling статуса (это делает mcsrvstat.us);
   * клиент создаётся по owner_id: кука расшифровывается из БД (Fernet),
@@ -31,9 +31,6 @@ from python_aternos import Client
 logger = logging.getLogger(__name__)
 
 CLIENT_TTL_SECONDS = 30 * 60  # TTL кеша клиентов: 30 минут
-
-
-BACKUP_CREATE_URL = "https://aternos.org/ajax/server/backups/create"
 
 
 class AternosError(Exception):
@@ -145,34 +142,6 @@ class AternosManager:
         server.stop()
         logger.info("owner %s: команда stop отправлена (aternos_id=%s)", self.owner_id, aternos_id)
 
-    def _backup_sync(self, cookie: str, aternos_id: str) -> None:
-        """Создаёт бэкап мира через AJAX-эндпоинт панели Aternos.
-
-        python-aternos 3.0.6 не имеет backup API (устаревшая библиотека),
-        поэтому используется тот же эндпоинт, что и кнопка «Backup» панели:
-        POST https://aternos.org/ajax/server/backups/create (sendtoken=True).
-        Бэкапы хранятся во внутреннем хранилище Aternos (вкладка Backups).
-        """
-        client = self._get_client_sync(cookie)
-        server = self._get_server_sync(client, aternos_id)
-        try:
-            response = server.atserver_request(
-                BACKUP_CREATE_URL,
-                "POST",
-                data={"name": ""},
-                sendtoken=True,
-                timeout=30,
-            )
-            payload = response.json()
-        except Exception as e:
-            logger.warning("owner %s: AJAX-бэкап %s не удался: %s", self.owner_id, aternos_id, e)
-            raise AternosError(f"Не удалось создать бэкап: {e}") from e
-        if not payload.get("success"):
-            raise AternosError(
-                f"Aternos не создал бэкап: {payload.get('error') or payload}"
-            )
-        logger.info("owner %s: бэкап %s создан", self.owner_id, aternos_id)
-
     def _queue_status_sync(self, cookie: str, aternos_id: str) -> dict:
         """Состояние сервера с панели (lastStatus -> _info) для queue_watcher.
 
@@ -246,24 +215,6 @@ class AternosManager:
             self.owner_id, "server_stop", server["display_name"], server_id=server_id
         )
         return f"Остановка сервера {server['display_name']} запрошена."
-
-    async def create_backup(self, server_id: int) -> str:
-        """Создаёт бэкап мира сервера владельца."""
-        server = await database.get_server(server_id)
-        if server is None or server["owner_id"] != self.owner_id:
-            raise AternosError("Сервер не найден или не принадлежит владельцу.")
-        try:
-            await self._run(self._backup_sync, server["aternos_id"])
-        except AternosError as exc:
-            raise AternosError(
-                f"{exc}\n"
-                "💡 Бэкапы создаются во вкладке Backups панели Aternos "
-                "(рекомендуется привязать Google Drive в настройках Aternos)."
-            ) from exc
-        await database.log_action(
-            self.owner_id, "server_backup", server["display_name"], server_id=server_id
-        )
-        return f"📦 Бэкап мира {server['display_name']} успешно создан!"
 
     async def get_queue_status(self, server_id: int) -> dict:
         """Текущий статус очереди запуска сервера (для queue_watcher)."""
