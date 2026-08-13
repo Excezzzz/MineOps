@@ -33,6 +33,9 @@ logger = logging.getLogger(__name__)
 CLIENT_TTL_SECONDS = 30 * 60  # TTL кеша клиентов: 30 минут
 
 
+BACKUP_CREATE_URL = "https://aternos.org/ajax/server/backups/create"
+
+
 class AternosError(Exception):
     """Ошибка взаимодействия с Aternos (обёртка над ошибками библиотеки)."""
 
@@ -143,20 +146,32 @@ class AternosManager:
         logger.info("owner %s: команда stop отправлена (aternos_id=%s)", self.owner_id, aternos_id)
 
     def _backup_sync(self, cookie: str, aternos_id: str) -> None:
+        """Создаёт бэкап мира через AJAX-эндпоинт панели Aternos.
+
+        python-aternos 3.0.6 не имеет backup API (устаревшая библиотека),
+        поэтому используется тот же эндпоинт, что и кнопка «Backup» панели:
+        POST https://aternos.org/ajax/server/backups/create (sendtoken=True).
+        Бэкапы хранятся во внутреннем хранилище Aternos (вкладка Backups).
+        """
         client = self._get_client_sync(cookie)
         server = self._get_server_sync(client, aternos_id)
-        backups_obj = getattr(server, "backups", None)
-        if backups_obj:
-            if hasattr(backups_obj, "create"):
-                backups_obj.create()
-            elif callable(backups_obj):
-                b = backups_obj()
-                if hasattr(b, "create"):
-                    b.create()
-        elif hasattr(server, "create_backup"):
-            server.create_backup()
-        else:
-            raise AternosError("Метод бэкапа не найден в текущей версии библиотеки.")
+        try:
+            response = server.atserver_request(
+                BACKUP_CREATE_URL,
+                "POST",
+                data={"name": ""},
+                sendtoken=True,
+                timeout=30,
+            )
+            payload = response.json()
+        except Exception as e:
+            logger.warning("owner %s: AJAX-бэкап %s не удался: %s", self.owner_id, aternos_id, e)
+            raise AternosError(f"Не удалось создать бэкап: {e}") from e
+        if not payload.get("success"):
+            raise AternosError(
+                f"Aternos не создал бэкап: {payload.get('error') or payload}"
+            )
+        logger.info("owner %s: бэкап %s создан", self.owner_id, aternos_id)
 
     def _queue_status_sync(self, cookie: str, aternos_id: str) -> dict:
         """Состояние сервера с панели (lastStatus -> _info) для queue_watcher.
@@ -242,8 +257,8 @@ class AternosManager:
         except AternosError as exc:
             raise AternosError(
                 f"{exc}\n"
-                "💡 Убедитесь, что к вашему аккаунту Aternos привязан "
-                "Google Drive (Настройки Aternos -> Backups)."
+                "💡 Бэкапы создаются во вкладке Backups панели Aternos "
+                "(рекомендуется привязать Google Drive в настройках Aternos)."
             ) from exc
         await database.log_action(
             self.owner_id, "server_backup", server["display_name"], server_id=server_id

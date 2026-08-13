@@ -136,8 +136,11 @@ async def _render_dashboard(bot: Bot, chat_id: int, text: str, kb) -> None:
 
     try:
         msg = await bot.send_message(chat_id=chat_id, text=text, reply_markup=kb)
-        await bot.pin_chat_message(chat_id=chat_id, message_id=msg.message_id)
+        await bot.pin_chat_message(
+            chat_id=chat_id, message_id=msg.message_id, disable_notification=True
+        )
         await database.set_chat_pinned_msg(chat_id, msg.message_id)
+        logger.info("чат %s: дашборд создан и закреплён (msg %s)", chat_id, msg.message_id)
     except (TelegramAPIError, AttributeError) as exc:
         logger.warning("chat %s: cannot create dashboard (%s)", chat_id, exc)
 
@@ -150,6 +153,15 @@ async def _update_chat_dashboard(bot: Bot, chat_id: int) -> None:
 
     servers = [{**s, "port": await database.get_server_port(s["id"])} for s in servers]
     statuses = await mcsrvstat.get_servers_status(servers)
+    for s in servers:
+        status = statuses.get(s["server_ip"], {})
+        known_port = await database.get_server_port(s["id"])
+        status_port = status.get("port")
+        if status_port and status_port != known_port:
+            await database.set_server_port(s["id"], status_port)
+            logger.info(
+                "сервер %s (id=%s): порт обновлён на %s", s["server_ip"], s["id"], status_port
+            )
     merged = [{**s, **statuses.get(s["server_ip"], {})} for s in servers]
     await _render_dashboard(bot, chat_id, format_dashboard_text(merged), get_dashboard_kb(merged, chat_id))
 
@@ -186,6 +198,13 @@ async def update_dashboards(bot: Bot) -> None:
             if status.get("is_online"):
                 clear_starting()
                 clear_queue_position(server["id"])
+            status_port = status.get("port")
+            if status_port and status_port != port:
+                await database.set_server_port(server["id"], status_port)
+                logger.info(
+                    "server %s (id=%s): порт обновлён на %s",
+                    server["server_ip"], server["id"], status_port,
+                )
         for chat in await database.get_chats_by_owner(owner["user_id"]):
             await _update_chat_dashboard(bot, int(chat["chat_id"]))
 

@@ -113,7 +113,24 @@ async def link_command(message: Message) -> None:
         await message.answer("У вас нет серверов. Сначала пройдите онбординг: /start в ЛС с ботом.")
         return
 
-    _link_selection[int(message.chat.id)] = set()
+    chat_id = int(message.chat.id)
+
+    if len(servers) == 1:
+        # Один сервер — привязываем сразу, без пикера, и создаём дашборд.
+        if not chat:
+            await database.add_chat(chat_id, user.id, message.chat.title or "")
+        await database.link_server_to_chat(chat_id, servers[0]["id"])
+        await database.log_action(
+            user.id, "chat_link", f"chat {chat_id} (авто)", chat_id=chat_id
+        )
+        logger.info("чат %s: авто-привязка сервера %s", chat_id, servers[0]["id"])
+        await message.answer(
+            f"✅ Чат привязан к серверу {servers[0]['display_name']} — создаю дашборд..."
+        )
+        await dashboard._update_chat_dashboard(message.bot, chat_id)
+        return
+
+    _link_selection[chat_id] = set()
     await message.answer(
         "🔗 Выберите серверы для дашборда этого чата:",
         reply_markup=get_link_kb(servers, set()),
