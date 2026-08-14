@@ -123,6 +123,27 @@ async def cmd_panel(message: Message) -> None:
     await message.answer(await _panel_text(user.id), reply_markup=get_owner_panel_kb())
 
 
+@router.message(Command("help"))
+async def cmd_help(message: Message) -> None:
+    """Справка в ЛС: команды владельца (для гостей — короткий ответ)."""
+    user = message.from_user
+    if user is None:
+        return
+    if not await database.is_owner(user.id):
+        await message.answer("Напишите /start, чтобы пройти онбординг.")
+        return
+    await message.answer(
+        "<b>Команды владельца:</b>\n"
+        "/panel — панель (серверы, чаты, настройки, аудит)\n"
+        "/set_session — обновить куку Aternos\n"
+        "/emergency — локдаун (вкл/выкл)\n\n"
+        "<b>В группе:</b>\n"
+        "/link — привязать чат (серверы выбираются в ЛС)\n"
+        "/unlink — отвязать чат\n"
+        "/status — обновить дашборд вручную"
+    )
+
+
 # ---------------------------------------------------------------------- #
 # Панель: навигация
 # ---------------------------------------------------------------------- #
