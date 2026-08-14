@@ -43,11 +43,40 @@ logger = logging.getLogger(__name__)
 UPDATE_INTERVAL = 30  # сек: период обновления дашбордов
 SESSION_CHECK_INTERVAL = 5 * 60  # сек: период проверки кук владельцев
 
+# Диагностика утечек памяти: TRACE_MEM=1 включает tracemalloc и каждые
+# MEM_TRACE_EVERY_TICKS тиков печатает топ аллокаций в лог.
+if os.getenv("TRACE_MEM") == "1":
+    import tracemalloc
+
+    tracemalloc.start(25)
+    logger.info("tracemalloc включён (диагностика памяти)")
+MEM_TRACE_EVERY_TICKS = 10
+
+
+def _log_mem_top() -> None:
+    """Логирует топ аллокаций tracemalloc (только при TRACE_MEM=1)."""
+    if not (os.getenv("TRACE_MEM") == "1" and tracemalloc.is_tracing()):
+        return
+    try:
+        snapshot = tracemalloc.take_snapshot()
+        for stat in snapshot.statistics("lineno", limit=8):
+            frame = stat.traceback.format()[0]
+            logger.info(
+                "MEMTOP %.1f MB / %d allocs <- %s",
+                stat.size / 1e6, stat.count, frame,
+            )
+    except Exception as exc:
+        logger.warning("MEMTOP: снимок не удался: %s", exc)
+
 
 async def update_dashboards_job(bot: Bot) -> None:
     """Обновляет дашборды всех владельцев (вызывается шедулером)."""
     from services.dashboard import update_dashboards
 
+    _mem_tick_count = getattr(update_dashboards_job, "_mem_ticks", 0) + 1
+    setattr(update_dashboards_job, "_mem_ticks", _mem_tick_count)
+    if _mem_tick_count % MEM_TRACE_EVERY_TICKS == 0:
+        _log_mem_top()
     await update_dashboards(bot)
 
 
