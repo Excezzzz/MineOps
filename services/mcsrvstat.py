@@ -249,12 +249,18 @@ async def get_players_list(server_ip: str, port: Optional[int] = None) -> List[s
         return []
 
 
-async def get_server_status(server_ip: str, port: Optional[int] = None) -> dict:
+async def get_server_status(
+    server_ip: str, port: Optional[int] = None, allow_legacy: bool = True
+) -> dict:
     """Возвращает статус сервера по адресу `server_ip` (+ опциональный порт).
 
     Порядок попыток: mcsrvstat API -> modern SLP на правильном порту ->
     legacy ping. «Правильный порт»: переданный (server_meta) -> порт из
     ответа API -> 25565. Никогда не бросает исключений.
+
+    allow_legacy=False отключает legacy-пинг: на Aternos его прокси отвечает
+    даже на оффлайн-серверах (фейковый «онлайн»), поэтому когда панель
+    Aternos недоступна, legacy использовать нельзя.
     """
     if not server_ip:
         logger.warning("не задан адрес сервера для статуса")
@@ -283,10 +289,11 @@ async def get_server_status(server_ip: str, port: Optional[int] = None) -> dict:
         slp["player_list"] = await get_players_list(host, slp.get("port"))
         return slp
 
-    legacy = await _legacy_ping(host, target_port)
-    if legacy is not None:
-        legacy["player_list"] = await get_players_list(host, legacy.get("port"))
-        return legacy
+    if allow_legacy:
+        legacy = await _legacy_ping(host, target_port)
+        if legacy is not None:
+            legacy["player_list"] = await get_players_list(host, legacy.get("port"))
+            return legacy
 
     if api_payload is not None:
         return api_payload

@@ -219,6 +219,14 @@ async def on_server_action(callback_query: CallbackQuery, callback_data: ServerC
             dashboard.clear_queue_position(server_id)
             await _safe_answer(callback_query, text)
             await dashboard.update_chats_dashboards(callback_query.bot, [chat_id])
+            other_chats = [
+                c["chat_id"]
+                for c in await database.get_chats_by_owner(owner["user_id"])
+                if int(c["chat_id"]) != chat_id
+            ]
+            await dashboard.broadcast_message(
+                callback_query.bot, other_chats, f"🛑 <b>{text}</b>"
+            )
         elif action == "confirm":
             await manager.confirm_server(server_id)
             dashboard.clear_queue_position(server_id)

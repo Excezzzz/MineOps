@@ -47,7 +47,7 @@ from keyboards.admin_kb import (
     get_server_card_kb,
     get_users_page_kb,
 )
-from services import dashboard, mcsrvstat
+from services import dashboard
 from services.aternos_api import AternosError, AternosManager
 from services.queue_watcher import start_queue_watcher
 from handlers.onboarding import start_onboarding
@@ -260,8 +260,7 @@ async def on_panel_server(callback_query: CallbackQuery, callback_data: PanelSer
     if server is None or server["owner_id"] != user.id:
         await callback_query.answer("Сервер не найден.")
         return
-    status = await mcsrvstat.get_server_status(server["server_ip"])
-    status = await dashboard.get_status_with_panel(user.id, server, status)
+    status = await dashboard.get_authoritative_status(user.id, server)
     is_online = bool(status["is_online"])
     state_text = "🟢 ОНЛАЙН" if is_online else "🔴 ОФФЛАЙН"
     await _safe_edit_text(

@@ -170,6 +170,8 @@ class AternosManager:
             "slots": int(info.get("slots") or 0),
             "port": int(info.get("port") or 0),
             "playerlist": [str(n) for n in (info.get("playerlist") or [])],
+            "version": str(info.get("version") or ""),
+            "name": str(info.get("name") or ""),
         }
 
     def _confirm_sync(self, cookie: str, aternos_id: str) -> None:
@@ -210,12 +212,13 @@ class AternosManager:
                 raise AternosError(f"Не удалось выполнить запрос к Aternos: {exc}") from exc
 
     def _check_session_sync(self, cookie: str) -> bool:
-        """Проверяет куку: вход в аккаунт без обращения к серверам.
+        """Проверяет куку: использует закешированного клиента, если он свежий.
 
-        Используется фоновой проверкой: дешевле, чем list_servers.
+        Фоновая проверка каждые 5 минут НЕ должна каждый раз логиниться
+        (это молотит Aternos Cloudflare): пока жив кеш клиента (30 минут),
+        проверка не делает ни одного сетевого запроса.
         """
-        client = Client()
-        client.login_with_session(cookie)
+        self._get_client_sync(cookie)
         return True
 
     async def check_session(self) -> None:

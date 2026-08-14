@@ -30,6 +30,12 @@ _starting_until = 0
 # Позиции в очереди Aternos по server_id (заполняет queue_watcher).
 _queue_positions: dict[int, int] = {}
 
+# Кеш статусов панели Aternos: server_id -> (момент запроса, панельный статус).
+# Панель — авторитетный источник online/offline; кеш спасает от Cloudflare-банов
+# (молотить Aternos каждые 30 с нельзя) и от врущего legacy-пинга.
+_panel_cache: dict[int, tuple[float, dict]] = {}
+PANEL_TTL_SECONDS = 60  # свежесть статуса панели
+
 
 async def _ensure_server_port(owner_id: int, server_id: int) -> int | None:
     """Актуальный порт сервера: кеш (server_meta), если он достоверен.
@@ -206,43 +212,60 @@ async def _render_dashboard(bot: Bot, chat_id: int, text: str, kb) -> None:
             logger.warning("chat %s: не удалось отправить подсказку о закрепе: %s", chat_id, exc)
 
 
-async def get_status_with_panel(
-    owner_id: int, server: dict, status: dict
-) -> dict:
-    """Кросс-проверка статуса mcsrvstat с панелью Aternos.
+async def _get_panel_cached(owner_id: int, server_id: int) -> dict | None:
+    """Статус панели Aternos с кешем (PANEL_TTL_SECONDS).
 
-    Публичный пинг на Aternos ВРЁТ: прокси отвечает даже на оффлайн-
-    серверах, поэтому панель — авторитетный источник online/offline,
-    количества игроков (players/slots) и их ников (playerlist). Если панель
-    недоступна (Cloudflare и т.п.) — отдаём публичный статус как есть.
+    Возвращает панельный словарь; None — панель недоступна и кеша нет.
+    При недоступности панели используется устаревший кеш (лучше, чем ничего).
     """
+    cached = _panel_cache.get(server_id)
+    now = time.monotonic()
+    if cached and now - cached[0] < PANEL_TTL_SECONDS:
+        return cached[1]
     from services.aternos_api import AternosError, AternosManager
 
     try:
-        panel = await AternosManager(owner_id).get_panel_status(int(server["id"]))
+        panel = await AternosManager(owner_id).get_panel_status(server_id)
     except AternosError as exc:
-        logger.warning(
-            "server %s (id=%s): статус панели не получен: %s",
-            server["server_ip"], server["id"], exc,
-        )
-        return status
+        logger.warning("server %s: статус панели не получен: %s", server_id, exc)
+        if cached:
+            return cached[1]  # устаревший кеш лучше, чем врущий legacy-пинг
+        return None
+    _panel_cache[server_id] = (now, panel)
+    return panel
 
-    merged = dict(status)
-    if int(panel.get("panel_status") or 0) == 1:  # панель: онлайн
-        merged["is_online"] = True
-        merged["players_online"] = int(panel.get("players") or 0)
-        merged["players_max"] = int(panel.get("slots") or 0) or merged.get("players_max", 0)
-        if panel.get("playerlist"):
-            merged["player_list"] = panel["playerlist"]
-        if panel.get("port"):
-            merged["port"] = int(panel["port"])
-    else:  # панель: оффлайн — публичный пинг не смог это опровергнуть
-        merged["is_online"] = False
-        merged["players_online"] = 0
-        merged["players_max"] = 0
-        merged["player_list"] = []
-        merged.pop("port", None)
-    return merged
+
+def _panel_to_status(server: dict, panel: dict) -> dict:
+    """Строит стандартный статус-словарь из данных панели Aternos."""
+    online = int(panel.get("panel_status") or 0) == 1
+    names = [str(n) for n in (panel.get("playerlist") or [])]
+    port = int(panel.get("port") or 0) or None
+    return {
+        "ip": str(server.get("server_ip") or ""),
+        "is_online": online,
+        "players_online": int(panel.get("players") or 0) if online else 0,
+        "players_max": int(panel.get("slots") or 0) if online else 0,
+        "player_names": names if online else [],
+        "player_list": names if online else [],
+        "version": str(panel.get("version") or "") or "Неизвестно",
+        "port": port,
+    }
+
+
+async def get_authoritative_status(owner_id: int, server: dict) -> dict:
+    """Авторитетный статус сервера: панель Aternos -> честный mcsrvstat.
+
+    Панель знает точный online/offline, игроков и ники; публичный
+    legacy-пинг на Aternos врёт (прокси отвечает на оффлайн-серверах),
+    поэтому при недоступности панели он отключается (allow_legacy=False).
+    """
+    panel = await _get_panel_cached(owner_id, int(server["id"]))
+    if panel is not None:
+        return _panel_to_status(server, panel)
+    port = await _ensure_server_port(int(server.get("owner_id") or owner_id), int(server["id"]))
+    return await mcsrvstat.get_server_status(
+        server["server_ip"], port=port, allow_legacy=False
+    )
 
 
 async def _update_chat_dashboard(bot: Bot, chat_id: int) -> None:
@@ -254,12 +277,10 @@ async def _update_chat_dashboard(bot: Bot, chat_id: int) -> None:
     for s in servers:
         port = await _ensure_server_port(int(s["owner_id"]), s["id"])
         s["port"] = port
-    statuses = await mcsrvstat.get_servers_status(servers)
-    for s in servers:
-        status = statuses.get(s["server_ip"], {})
-        statuses[s["server_ip"]] = await get_status_with_panel(
-            int(s["owner_id"]), s, status
-        )
+    statuses = {
+        s["server_ip"]: await get_authoritative_status(int(s["owner_id"]), s)
+        for s in servers
+    }
     for s in servers:
         status = statuses.get(s["server_ip"], {})
         known_port = await database.get_server_port(s["id"])
@@ -354,8 +375,7 @@ async def update_dashboards(bot: Bot) -> None:
                 server["server_ip"], server["id"], len(chats),
             )
             port = await _ensure_server_port(int(owner["user_id"]), server["id"])
-            status = await mcsrvstat.get_server_status(server["server_ip"], port=port)
-            status = await get_status_with_panel(int(owner["user_id"]), server, status)
+            status = await get_authoritative_status(int(owner["user_id"]), server)
             statuses_by_server[int(server["id"])] = status
             logger.info(
                 "server %s: online=%s (players %s/%s, port=%s)",
