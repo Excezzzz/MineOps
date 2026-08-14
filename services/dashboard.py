@@ -171,6 +171,24 @@ async def _try_pin(bot: Bot, chat_id: int, message_id: int) -> bool:
         return False
 
 
+async def _pin_if_needed(bot: Bot, chat_id: int, message_id: int) -> bool:
+    """Закрепляет дашборд, если он ещё не закреплён (самовосстановление).
+
+    Проверяет фактическое состояние через get_chat, а не по памяти:
+    после рестарта бота `_pin_pending` пуст, а дашборд мог остаться
+    незакреплённым — get_chat это находит и закрепляет.
+    """
+    try:
+        chat_info = await bot.get_chat(chat_id)
+        pinned_id = getattr(chat_info.pinned_message, "message_id", None)
+        if pinned_id == message_id:
+            return True
+    except Exception as exc:
+        logger.warning("chat %s: не удалось проверить закреп: %s", chat_id, exc)
+        return False
+    return await _try_pin(bot, chat_id, message_id)
+
+
 async def _render_dashboard(bot: Bot, chat_id: int, text: str, kb) -> None:
     """Обновляет или (пере)создаёт закреплённый дашборд в одном чате.
 
@@ -186,14 +204,17 @@ async def _render_dashboard(bot: Bot, chat_id: int, text: str, kb) -> None:
             await bot.edit_message_text(
                 text=text, chat_id=chat_id, message_id=pinned_msg_id, reply_markup=kb
             )
-            if chat_id in _pin_pending:
-                # Сообщение живое, но пин ранее не удался (прав не было) —
-                # теперь есть права, пробуем дозакрепить.
-                if await _try_pin(bot, chat_id, pinned_msg_id):
-                    _pin_pending.discard(chat_id)
+            if chat_id in _pin_pending or not await _pin_if_needed(bot, chat_id, pinned_msg_id):
+                _pin_pending.add(chat_id)
+            else:
+                _pin_pending.discard(chat_id)
             return
         except TelegramAPIError as exc:
             if "message is not modified" in str(exc):
+                if chat_id in _pin_pending or not await _pin_if_needed(bot, chat_id, pinned_msg_id):
+                    _pin_pending.add(chat_id)
+                else:
+                    _pin_pending.discard(chat_id)
                 return  # контент не изменился — дашборд актуален
             logger.warning("chat %s: edit dashboard failed (%s), will re-send", chat_id, exc)
         # Падаем вниз и пересоздаём сообщение.
