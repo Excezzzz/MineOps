@@ -479,6 +479,14 @@ class Database:
         row = await cur.fetchone()
         return dict(row) if row is not None else None
 
+    async def get_chat_owner(self, chat_id: int) -> Optional[int]:
+        """owner_id владельца чата (None — чат не привязан)."""
+        cur = await self.conn.execute(
+            "SELECT owner_id FROM chats WHERE chat_id = ?", (chat_id,)
+        )
+        row = await cur.fetchone()
+        return int(row["owner_id"]) if row is not None else None
+
     async def chat_exists(self, chat_id: int) -> bool:
         cur = await self.conn.execute("SELECT 1 FROM chats WHERE chat_id = ?", (chat_id,))
         return (await cur.fetchone()) is not None
@@ -826,8 +834,13 @@ async def add_chat(chat_id: int, owner_id: int, title: str = "") -> bool:
 
 
 async def get_chat(chat_id: int) -> Optional[dict]:
-    """Чат по ID (обёртка)."""
+    """Чат по id (обёртка)."""
     return await get_db().get_chat(chat_id)
+
+
+async def get_chat_owner(chat_id: int) -> Optional[int]:
+    """owner_id владельца чата (обёртка)."""
+    return await get_db().get_chat_owner(chat_id)
 
 
 async def chat_exists(chat_id: int) -> bool:

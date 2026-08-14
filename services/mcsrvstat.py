@@ -167,7 +167,7 @@ async def _legacy_ping(host: str, port: int) -> Optional[dict]:
 
         def _to_int(value: str) -> int:
             try:
-                return int(value)
+                return max(0, int(value))
             except (TypeError, ValueError):
                 return 0
 
@@ -272,10 +272,10 @@ async def get_server_status(server_ip: str, port: Optional[int] = None) -> dict:
         api_payload["player_list"] = await get_players_list(host, api_payload.get("port"))
         return api_payload
 
-    api_port = (api_payload or {}).get("port")
-    # Порт из ответа API важнее кеша: он актуален даже после смены порта
-    # при рестарте сервера (редирект *.aternos.me:25565 отвечает всегда,
-    # но с фейковыми данными 0/0 и «A Minecraft server»).
+    # Порт из ответа API доверяем ТОЛЬКО когда сервер онлайн: у оффлайн-ответа
+    # порт всегда 25565 (дефолт), а редирект *.aternos.me:25565 отвечает
+    # фейком 0/0 — не даём ему отравить реальный порт из панели.
+    api_port = (api_payload or {}).get("port") if (api_payload or {}).get("is_online") else None
     target_port = api_port or explicit_port or 25565
 
     slp = await _modern_slp(host, target_port)
