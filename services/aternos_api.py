@@ -64,6 +64,14 @@ class AternosManager:
             client.login_with_session(cookie)
         except Exception as e:
             logger.error("owner %s: логин по куке не удался: %s", self.owner_id, e)
+            if "cloudflare" in str(e).lower():
+                # Это не просроченная кука, а временный бан запросов —
+                # фоновые проверки должны пропустить его, а не слать
+                # ложное уведомление «кука просрочена».
+                raise AternosError(
+                    "⚠️ Aternos временно заблокировал запрос (Cloudflare). "
+                    "Подождите 3-5 минут или обновите куку /set_session."
+                ) from e
             raise AternosError(
                 "⚠️ Сессия Aternos истекла или недействительна!\n"
                 "Обновите куку командой /set_session в личке с ботом."
