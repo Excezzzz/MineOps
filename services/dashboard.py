@@ -189,7 +189,9 @@ async def _update_chat_dashboard(bot: Bot, chat_id: int) -> None:
         status = statuses.get(s["server_ip"], {})
         known_port = await database.get_server_port(s["id"])
         status_port = status.get("port")
-        if status_port and status_port != known_port:
+        # Пишем порт только при живом ответе: оффлайн-фолбэк отдаёт
+        # дефолтный 25565 и мог бы перетереть реальный порт из панели.
+        if status.get("is_online") and status_port and status_port != known_port:
             await database.set_server_port(s["id"], status_port)
             logger.info(
                 "сервер %s (id=%s): порт обновлён на %s", s["server_ip"], s["id"], status_port
@@ -282,7 +284,8 @@ async def update_dashboards(bot: Bot) -> None:
                 clear_starting()
                 clear_queue_position(server["id"])
             status_port = status.get("port")
-            if status_port and status_port != port:
+            # Пишем порт только при живом ответе (оффлайн-фолбэк = 25565).
+            if status.get("is_online") and status_port and status_port != port:
                 await database.set_server_port(server["id"], status_port)
                 logger.info(
                     "server %s (id=%s): порт обновлён на %s",
