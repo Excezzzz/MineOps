@@ -23,9 +23,11 @@ import aiohttp
 logger = logging.getLogger(__name__)
 
 API_URL = "https://api.mcsrvstat.us/3/{ip}"
+MCSTATUS_URL = "https://api.mcstatus.io/v2/status/java/{addr}"
 LEGACY_PING_TIMEOUT = 5.0  # сек
 MODERN_SLP_TIMEOUT = 4.0   # сек
 REQUEST_TIMEOUT = 7.0      # сек, для mcsrvstat.us
+PLAYERS_LIST_TIMEOUT = 8.0  # сек, для mcstatus.io
 HTTP_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     " (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
@@ -40,6 +42,7 @@ def _empty_payload(server_ip: str) -> dict:
         "players_online": 0,
         "players_max": 0,
         "player_names": [],
+        "player_list": [],
         "version": "Неизвестно",
     }
 
@@ -215,6 +218,37 @@ async def _api_status(server_ip: str) -> Optional[dict]:
         return None
 
 
+async def get_players_list(server_ip: str, port: Optional[int] = None) -> List[str]:
+    """Ники игроков через mcstatus.io; [] при любой ошибке.
+
+    Имя: name_clean (иначе name_raw); нестандартный порт добавляется к адресу.
+    """
+    addr = server_ip
+    if port and int(port) != 25565:
+        addr = f"{server_ip}:{int(port)}"
+    url = MCSTATUS_URL.format(addr=addr)
+    timeout = aiohttp.ClientTimeout(total=PLAYERS_LIST_TIMEOUT)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url, headers={"User-Agent": HTTP_UA}) as response:
+                if response.status != 200:
+                    logger.warning("mcstatus.io вернул HTTP %s для %s", response.status, addr)
+                    return []
+                data = await response.json()
+        players = data.get("players") or {}
+        names: List[str] = []
+        for p in players.get("list") or []:
+            if isinstance(p, dict):
+                name = p.get("name_clean") or p.get("name_raw") or "???"
+            else:
+                name = str(p) or "???"
+            names.append(name)
+        return names
+    except (asyncio.TimeoutError, aiohttp.ClientError, ValueError) as exc:
+        logger.warning("mcstatus.io недоступен для %s: %s", addr, exc)
+        return []
+
+
 async def get_server_status(server_ip: str, port: Optional[int] = None) -> dict:
     """Возвращает статус сервера по адресу `server_ip` (+ опциональный порт).
 
@@ -235,6 +269,7 @@ async def get_server_status(server_ip: str, port: Optional[int] = None) -> dict:
 
     api_payload = await _api_status(server_ip)
     if api_payload is not None and api_payload.get("is_online"):
+        api_payload["player_list"] = await get_players_list(host, api_payload.get("port"))
         return api_payload
 
     api_port = (api_payload or {}).get("port")
@@ -245,10 +280,12 @@ async def get_server_status(server_ip: str, port: Optional[int] = None) -> dict:
 
     slp = await _modern_slp(host, target_port)
     if slp is not None:
+        slp["player_list"] = await get_players_list(host, slp.get("port"))
         return slp
 
     legacy = await _legacy_ping(host, target_port)
     if legacy is not None:
+        legacy["player_list"] = await get_players_list(host, legacy.get("port"))
         return legacy
 
     if api_payload is not None:

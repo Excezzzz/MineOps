@@ -1,4 +1,4 @@
-"""Работа с Aternos через python-aternos (multi-tenant, per-owner).
+﻿"""Работа с Aternos через python-aternos (multi-tenant, per-owner).
 
 Архитектурные правила:
   * python-aternos — СИНХРОННАЯ библиотека, все вызовы обёрнуты в
@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 import database
 from services.crypto import decrypt_session

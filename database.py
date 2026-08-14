@@ -23,8 +23,6 @@ from typing import List, Optional
 
 import aiosqlite
 
-from config import config
-
 SCHEMA_VERSION = 4
 
 
@@ -337,6 +335,11 @@ class Database:
             return None
         return int(row["pm_pinned_msg_id"]) if row["pm_pinned_msg_id"] is not None else None
 
+    async def delete_owner(self, user_id: int) -> None:
+        """Удаляет владельца: серверы/чаты/участники удаляются каскадом."""
+        await self.conn.execute("DELETE FROM owners WHERE user_id = ?", (user_id,))
+        await self.conn.commit()
+
     # ------------------------------------------------------------------ #
     # servers
     # ------------------------------------------------------------------ #
@@ -401,6 +404,20 @@ class Database:
         await self.conn.execute(
             "UPDATE servers SET is_active = ? WHERE id = ?",
             (1 if active else 0, server_id),
+        )
+        await self.conn.commit()
+
+    async def deactivate_server(self, server_id: int) -> None:
+        """Деактивирует сервер (is_active=0); записи в чатах остаются."""
+        await self.conn.execute(
+            "UPDATE servers SET is_active = 0 WHERE id = ?", (server_id,)
+        )
+        await self.conn.commit()
+
+    async def unbind_server_from_all_chats(self, server_id: int) -> None:
+        """Отвязывает сервер от ВСЕХ чатов (для деактивации)."""
+        await self.conn.execute(
+            "DELETE FROM chat_servers WHERE server_id = ?", (server_id,)
         )
         await self.conn.commit()
 
@@ -711,6 +728,11 @@ async def get_owner_pm_pinned(user_id: int) -> Optional[int]:
     return await get_db().get_owner_pm_pinned(user_id)
 
 
+async def delete_owner(user_id: int) -> None:
+    """Удаляет владельца со всеми серверами и чатами (обёртка)."""
+    await get_db().delete_owner(user_id)
+
+
 async def update_owner_session(user_id: int, encrypted_session: str) -> None:
     """Обновляет зашифрованную куку (обёртка)."""
     await get_db().update_owner_session(user_id, encrypted_session)
@@ -760,6 +782,16 @@ async def get_active_servers_by_owner(owner_id: int) -> List[dict]:
 async def set_server_active(server_id: int, active: bool) -> None:
     """Включает/выключает сервер (обёртка)."""
     await get_db().set_server_active(server_id, active)
+
+
+async def deactivate_server(server_id: int) -> None:
+    """Деактивирует сервер (обёртка)."""
+    await get_db().deactivate_server(server_id)
+
+
+async def unbind_server_from_all_chats(server_id: int) -> None:
+    """Отвязывает сервер от всех чатов (обёртка)."""
+    await get_db().unbind_server_from_all_chats(server_id)
 
 
 async def update_server_name(server_id: int, display_name: str) -> None:

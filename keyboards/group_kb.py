@@ -1,12 +1,10 @@
-"""Клавиатуры чата: дашборд с кнопками управления и запрос доступа.
+﻿"""Клавиатуры чата: дашборд с кнопками управления и запрос доступа.
 
 Multi-tenant: кнопки управления серверами привязаны к server_id владельца,
 запросы доступа уходят владельцу конкретного чата (а не глобальному админу).
 """
 
 from __future__ import annotations
-
-from typing import Optional
 
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup

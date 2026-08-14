@@ -1,4 +1,4 @@
-"""Групповой роутер (multi-tenant): дашборд, кнопки серверов, /link, доступ.
+﻿"""Групповой роутер (multi-tenant): дашборд, кнопки серверов, /link, доступ.
 
 - /link — владелец привязывает чат и ВСЕ свои серверы (дашборд закрепится);
 - /unlink — владелец отвязывает чат (дашборд удаляется);
@@ -210,7 +210,7 @@ async def help_command(message: Message) -> None:
 @router.callback_query(ServerCb.filter())
 async def on_server_action(callback_query: CallbackQuery, callback_data: ServerCb) -> None:
     """Обрабатывает кнопки управления сервером на дашборде."""
-    await callback_query.answer()  # сразу гасим «часики», тяжёлая работа — дальше
+    await callback_query.answer()
     if not callback_query.message.chat or callback_query.message.chat.type == "private":
         await callback_query.answer("Кнопки дашборда работают в групповом чате.")
         return
@@ -272,7 +272,7 @@ async def on_refresh_dashboard(callback_query: CallbackQuery) -> None:
 @router.callback_query(ReqAccessCb.filter())
 async def on_request_access(callback_query: CallbackQuery, callback_data: ReqAccessCb) -> None:
     """Участник без доступа запрашивает права у владельца чата."""
-    await callback_query.answer()  # сразу гасим «часики»
+    await callback_query.answer()
     user = callback_query.from_user
     if user is None:
         return
@@ -319,7 +319,7 @@ async def on_request_access(callback_query: CallbackQuery, callback_data: ReqAcc
 @router.callback_query(ApproveAccessCb.filter())
 async def on_approve_access(callback_query: CallbackQuery, callback_data: ApproveAccessCb) -> None:
     """Владелец чата одобряет/отклоняет запрос доступа."""
-    await callback_query.answer()  # сразу гасим «часики»
+    await callback_query.answer()
     user = callback_query.from_user
     if user is None:
         return

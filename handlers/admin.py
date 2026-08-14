@@ -1,4 +1,4 @@
-"""Личная панель владельца и суперадмина (DM, multi-tenant).
+﻿"""Личная панель владельца и суперадмина (DM, multi-tenant).
 
 /start — если пользователь уже владелец: панель; иначе: онбординг.
 /panel — панель владельца (серверы, чаты, настройки, аудит).
@@ -15,30 +15,36 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from html import escape as quote_html
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandStart
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
 import database
-from config import config
 from filters.access import IsSuperAdminFilter
 from keyboards.admin_kb import (
+    DeleteAccountCb,
     OwnerSettingsCb,
     PanelActionCb,
     PanelCb,
     PanelChatCb,
     PanelServerCb,
+    RefreshServerCb,
     UsersPageCb,
     get_chat_card_kb,
+    get_delete_account_kb,
     get_owner_audit_kb,
     get_owner_chats_kb,
     get_owner_panel_kb,
     get_owner_servers_kb,
     get_owner_settings_kb,
+    get_refresh_servers_kb,
     get_server_card_kb,
     get_users_page_kb,
 )
@@ -53,6 +59,17 @@ router = Router(name="admin")
 router.message.filter(F.chat.type == "private")
 
 USERS_PAGE_SIZE = 10
+
+
+class SessionRefreshState(StatesGroup):
+    """FSM: ждём новую куку Aternos (кнопка «Обновить куку» в панели)."""
+
+    waiting_cookie = State()
+
+
+# Список серверов аккаунта и текущий выбор для «Обновить серверы».
+_refresh_servers: dict[int, list[dict]] = {}
+_refresh_selection: dict[int, set[str]] = {}
 
 
 async def _safe_edit_text(message, text: str, reply_markup=None) -> None:
@@ -116,9 +133,11 @@ async def cmd_panel(message: Message) -> None:
 # Панель: навигация
 # ---------------------------------------------------------------------- #
 @router.callback_query(PanelCb.filter())
-async def on_panel(callback_query: CallbackQuery, callback_data: PanelCb) -> None:
+async def on_panel(
+    callback_query: CallbackQuery, callback_data: PanelCb, state: FSMContext
+) -> None:
     user = callback_query.from_user
-    await callback_query.answer()  # сразу гасим «часики»
+    await callback_query.answer()
     if user is None or not await _require_owner(callback_query, user.id):
         return
     action = callback_data.action
@@ -152,6 +171,54 @@ async def on_panel(callback_query: CallbackQuery, callback_data: PanelCb) -> Non
                 )
             text = "\n".join(lines)
         await _safe_edit_text(callback_query.message, text, get_owner_audit_kb())
+    elif action == "refresh_servers":
+        manager = AternosManager(user.id)
+        try:
+            aternos_servers = await asyncio.wait_for(
+                manager.list_account_servers(), timeout=60
+            )
+        except asyncio.TimeoutError:
+            await _safe_edit_text(
+                callback_query.message, "⏱ Таймаут Aternos, попробуйте ещё раз.",
+                get_owner_panel_kb(),
+            )
+            return
+        except AternosError as exc:
+            await _safe_edit_text(callback_query.message, f"❌ {exc}", get_owner_panel_kb())
+            return
+        if not aternos_servers:
+            await _safe_edit_text(
+                callback_query.message, "❌ На аккаунте Aternos нет серверов.",
+                get_owner_panel_kb(),
+            )
+            return
+        existing = await database.get_servers_by_owner(user.id)
+        existing_ids = {s["aternos_id"] for s in existing}
+        fetched_ids = {s["aternos_id"] for s in aternos_servers}
+        _refresh_servers[user.id] = aternos_servers
+        _refresh_selection[user.id] = existing_ids & fetched_ids
+        await _safe_edit_text(
+            callback_query.message,
+            "🔄 Серверы аккаунта Aternos.\n"
+            "☑️ отмечены подключённые. Снимите галочку — сервер отключится, "
+            "поставьте — подключится.",
+            get_refresh_servers_kb(aternos_servers, _refresh_selection[user.id]),
+        )
+    elif action == "refresh_session":
+        await state.set_state(SessionRefreshState.waiting_cookie)
+        await _safe_edit_text(
+            callback_query.message,
+            "🔑 Отправь новую куку <code>ATERNOS_SESSION</code> — "
+            "сообщение будет сразу удалено.",
+        )
+    elif action == "delete_account":
+        await _safe_edit_text(
+            callback_query.message,
+            "🗑 <b>Удалить аккаунт?</b>\n\n"
+            "Будут удалены все серверы и отвязаны все чаты. "
+            "Онбординг можно будет пройти заново через /start.",
+            get_delete_account_kb(),
+        )
     elif action == "back":
         await _safe_edit_text(
             callback_query.message,
@@ -167,7 +234,7 @@ async def on_panel(callback_query: CallbackQuery, callback_data: PanelCb) -> Non
 @router.callback_query(PanelServerCb.filter())
 async def on_panel_server(callback_query: CallbackQuery, callback_data: PanelServerCb) -> None:
     user = callback_query.from_user
-    await callback_query.answer()  # сразу гасим «часики»
+    await callback_query.answer()
     if user is None or not await _require_owner(callback_query, user.id):
         return
     server = await database.get_server(int(callback_data.server_id))
@@ -194,7 +261,7 @@ async def on_panel_server(callback_query: CallbackQuery, callback_data: PanelSer
 async def on_panel_action(callback_query: CallbackQuery, callback_data: PanelActionCb) -> None:
     """Действия над сервером из панели владельца."""
     user = callback_query.from_user
-    await callback_query.answer()  # сразу гасим «часики», тяжёлая работа — дальше
+    await callback_query.answer()
     if user is None or not await _require_owner(callback_query, user.id):
         return
     server = await database.get_server(int(callback_data.server_id))
@@ -231,20 +298,169 @@ async def on_panel_action(callback_query: CallbackQuery, callback_data: PanelAct
                 [int(c["chat_id"]) for c in await database.get_chats_by_owner(user.id)],
             )
         elif action == "delete":
-            await database.remove_server(server["id"])
-            await database.log_action(user.id, "server_delete", server["display_name"])
-            await callback_query.answer("Сервер удалён.")
+            chats = await database.get_chats_for_server(server["id"])
+            chat_ids = [int(c["chat_id"]) for c in chats]
+            await database.unbind_server_from_all_chats(server["id"])
+            await database.deactivate_server(server["id"])
+            await database.log_action(user.id, "server_deactivate", server["display_name"])
+            await callback_query.answer("Сервер отключён.")
             servers = await database.get_active_servers_by_owner(user.id)
             await _safe_edit_text(
                 callback_query.message,
                 "<b>Ваши серверы:</b>",
                 get_owner_servers_kb(servers),
             )
+            if chat_ids:
+                await dashboard.update_chats_dashboards(callback_query.bot, chat_ids)
     except AternosError as exc:
         await callback_query.answer(str(exc), show_alert=True)
     except Exception as exc:
         logger.exception("panel action %s failed: %s", action, exc)
         await callback_query.answer(f"⚠️ Ошибка: {exc}", show_alert=True)
+
+
+@router.callback_query(RefreshServerCb.filter())
+async def on_refresh_server(
+    callback_query: CallbackQuery, callback_data: RefreshServerCb
+) -> None:
+    """Галочки при обновлении серверов; «Готово» применяет изменения в БД."""
+    user = callback_query.from_user
+    await callback_query.answer()
+    if user is None or not await _require_owner(callback_query, user.id):
+        return
+    servers = _refresh_servers.get(user.id)
+    if servers is None:
+        await callback_query.answer(
+            "Сессия обновления устарела — нажмите «🔄 Обновить серверы» заново."
+        )
+        return
+    selected = _refresh_selection.setdefault(user.id, set())
+
+    if callback_data.action == "toggle":
+        sid = callback_data.aternos_id
+        if sid in selected:
+            selected.discard(sid)
+        else:
+            selected.add(sid)
+        await _safe_edit_text(
+            callback_query.message,
+            "🔄 Серверы аккаунта Aternos.\n"
+            "☑️ отмечены подключённые. Снимите галочку — сервер отключится, "
+            "поставьте — подключится.",
+            get_refresh_servers_kb(servers, selected),
+        )
+        return
+
+    _refresh_servers.pop(user.id, None)
+    _refresh_selection.pop(user.id, None)
+    if callback_data.action == "cancel":
+        await _safe_edit_text(
+            callback_query.message, await _panel_text(user.id), get_owner_panel_kb()
+        )
+        return
+
+    existing = await database.get_servers_by_owner(user.id)
+    by_id = {s["aternos_id"]: s for s in existing}
+    added: list[str] = []
+    removed: list[str] = []
+    touched_chat_ids: set[int] = set()
+    for s in servers:
+        aid = s["aternos_id"]
+        if aid in selected:
+            if aid in by_id:
+                if not by_id[aid]["is_active"]:
+                    await database.set_server_active(by_id[aid]["id"], True)
+            else:
+                server_id = await database.add_server(
+                    user.id, aid, s["server_ip"], s["display_name"]
+                )
+                if server_id is not None:
+                    added.append(s["display_name"])
+        elif aid in by_id and by_id[aid]["is_active"]:
+            chats = await database.get_chats_for_server(by_id[aid]["id"])
+            touched_chat_ids.update(int(c["chat_id"]) for c in chats)
+            await database.unbind_server_from_all_chats(by_id[aid]["id"])
+            await database.deactivate_server(by_id[aid]["id"])
+            removed.append(by_id[aid]["display_name"])
+    await database.log_action(
+        user.id, "servers_refresh", f"+{', '.join(added)} -{', '.join(removed)}"
+    )
+    await _safe_edit_text(
+        callback_query.message, await _panel_text(user.id), get_owner_panel_kb()
+    )
+    if touched_chat_ids:
+        await dashboard.update_chats_dashboards(
+            callback_query.bot, sorted(touched_chat_ids)
+        )
+    if added or removed:
+        await callback_query.answer(
+            "\n".join(
+                ([f"➕ Добавлены: {', '.join(added)}"] if added else [])
+                + ([f"➖ Отключены: {', '.join(removed)}"] if removed else [])
+            )
+        )
+
+
+@router.callback_query(DeleteAccountCb.filter())
+async def on_delete_account(
+    callback_query: CallbackQuery, callback_data: DeleteAccountCb
+) -> None:
+    """Подтверждение «🗑 Удалить аккаунт»: полное удаление владельца."""
+    user = callback_query.from_user
+    await callback_query.answer()
+    if user is None or not await _require_owner(callback_query, user.id):
+        return
+    if not callback_data.confirm:
+        await _safe_edit_text(
+            callback_query.message, await _panel_text(user.id), get_owner_panel_kb()
+        )
+        return
+    chats = await database.get_chats_by_owner(user.id)
+    pm_pinned = await database.get_owner_pm_pinned(user.id)
+    await database.delete_owner(user.id)
+    for chat in chats:
+        try:
+            await callback_query.bot.unpin_chat_message(
+                chat_id=int(chat["chat_id"]), message_id=chat["pinned_msg_id"]
+            )
+        except Exception:
+            pass
+    if pm_pinned:
+        try:
+            await callback_query.bot.unpin_chat_message(
+                chat_id=user.id, message_id=pm_pinned
+            )
+        except Exception:
+            pass
+    await _safe_edit_text(
+        callback_query.message,
+        "🗑 <b>Аккаунт удалён.</b>\nНапишите /start, чтобы пройти онбординг заново.",
+    )
+
+
+@router.message(SessionRefreshState.waiting_cookie)
+async def on_new_cookie_message(message: Message, state: FSMContext) -> None:
+    """Принимает новую куку: удаляет сообщение, проверяет и сохраняет."""
+    user = message.from_user
+    cookie = (message.text or "").strip()
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    await state.clear()
+    if user is None or not cookie:
+        return
+    manager = AternosManager(user.id)
+    try:
+        await asyncio.wait_for(manager.probe_session(cookie), timeout=60)
+    except asyncio.TimeoutError:
+        await message.answer("⏱ Таймаут Aternos. Попробуйте ещё раз.")
+        return
+    except AternosError as exc:
+        await message.answer(f"❌ Кука недействительна: {exc}")
+        return
+    await manager.update_session(cookie)
+    await message.answer("✅ Кука обновлена! Кеш клиента сброшен.")
 
 
 # ---------------------------------------------------------------------- #
@@ -253,7 +469,7 @@ async def on_panel_action(callback_query: CallbackQuery, callback_data: PanelAct
 @router.callback_query(PanelChatCb.filter())
 async def on_panel_chat(callback_query: CallbackQuery, callback_data: PanelChatCb) -> None:
     user = callback_query.from_user
-    await callback_query.answer()  # сразу гасим «часики»
+    await callback_query.answer()
     if user is None or not await _require_owner(callback_query, user.id):
         return
     chat_id = int(callback_data.chat_id)
@@ -301,7 +517,7 @@ async def on_panel_chat(callback_query: CallbackQuery, callback_data: PanelChatC
 @router.callback_query(UsersPageCb.filter())
 async def on_users_page(callback_query: CallbackQuery, callback_data: UsersPageCb) -> None:
     user = callback_query.from_user
-    await callback_query.answer()  # сразу гасим «часики»
+    await callback_query.answer()
     if user is None or not await _require_owner(callback_query, user.id):
         return
     chat_id = int(callback_data.chat_id)
@@ -336,7 +552,7 @@ async def _show_users_page(callback_query: CallbackQuery, owner_id: int, chat_id
 @router.callback_query(OwnerSettingsCb.filter())
 async def on_owner_settings(callback_query: CallbackQuery, callback_data: OwnerSettingsCb) -> None:
     user = callback_query.from_user
-    await callback_query.answer()  # сразу гасим «часики»
+    await callback_query.answer()
     if user is None or not await _require_owner(callback_query, user.id):
         return
     if callback_data.action == "lockdown":

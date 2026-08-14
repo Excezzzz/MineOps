@@ -121,18 +121,22 @@ def format_dashboard_text(servers: list[dict]) -> str:
 
         players_online = s.get("players_online", 0)
         players_max = s.get("players_max", 0)
-        player_names = s.get("player_names") or []
-        who_plays = ", ".join(quote_html(str(n)) for n in player_names[:10])
-        if not who_plays:
-            who_plays = "Нет игроков"
+        player_list = s.get("player_list") or []
+        if player_list:
+            players_line = "👥 Игроки ({}/{}):\n{}".format(
+                players_online,
+                players_max,
+                "\n".join(f"• {quote_html(str(n))}" for n in player_list[:20]),
+            )
+        else:
+            players_line = f"👥 Игроки: {players_online}/{players_max}"
 
         blocks.append(
             "\n".join(
                 [
                     status_line,
                     f"🌐 IP: {quote_html(ip)}",
-                    f"👥 Игроки: {players_online}/{players_max}",
-                    f"📜 Кто играет: {who_plays}",
+                    players_line,
                     f"📦 Версия: {quote_html(str(s.get('version', 'Неизвестно')) or 'Неизвестно')}",
                 ]
             )
@@ -230,7 +234,6 @@ async def _update_owner_pm_dashboard(bot: Bot, owner: dict, merged: list[dict]) 
             owner["user_id"], msg.message_id,
         )
     except Exception as exc:
-        # Юзер мог заблокировать бота — не фатально.
         logger.warning("owner %s: PM-дашборд не создан: %s", owner["user_id"], exc)
 
 

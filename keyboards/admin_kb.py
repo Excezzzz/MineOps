@@ -7,7 +7,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 # Панель владельца.
 class PanelCb(CallbackData, prefix="panel"):
-    action: str  # "servers" | "chats" | "settings" | "audit" | "back" | "add_server"
+    action: str  # "servers" | "chats" | "settings" | "audit" | "back" | "add_server" | "refresh_servers" | "refresh_session" | "delete_account"
 
 # Карточка сервера в панели.
 class PanelServerCb(CallbackData, prefix="psrv"):
@@ -33,6 +33,15 @@ class OwnerSettingsCb(CallbackData, prefix="oset"):
     action: str     # "auto_confirm" | "lockdown"
     enabled: bool   # целевое значение (вкл/выкл)
 
+# Обновление серверов из аккаунта Aternos (чекбоксы как при онбординге).
+class RefreshServerCb(CallbackData, prefix="rsrv"):
+    action: str         # "toggle" | "done" | "cancel"
+    aternos_id: str = ""
+
+# Подтверждение удаления аккаунта.
+class DeleteAccountCb(CallbackData, prefix="delacc"):
+    confirm: bool
+
 
 def get_owner_panel_kb() -> InlineKeyboardMarkup:
     """Главное меню панели владельца."""
@@ -42,6 +51,9 @@ def get_owner_panel_kb() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="💬 Чаты", callback_data=PanelCb(action="chats").pack())],
             [InlineKeyboardButton(text="⚙️ Настройки", callback_data=PanelCb(action="settings").pack())],
             [InlineKeyboardButton(text="📋 Аудит", callback_data=PanelCb(action="audit").pack())],
+            [InlineKeyboardButton(text="🔄 Обновить серверы", callback_data=PanelCb(action="refresh_servers").pack())],
+            [InlineKeyboardButton(text="🔄 Обновить куку", callback_data=PanelCb(action="refresh_session").pack())],
+            [InlineKeyboardButton(text="🗑 Удалить аккаунт", callback_data=PanelCb(action="delete_account").pack())],
         ]
     )
 
@@ -206,5 +218,58 @@ def get_owner_audit_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="🔙 Назад", callback_data=PanelCb(action="back").pack())]
+        ]
+    )
+
+
+def get_refresh_servers_kb(
+    servers: list[dict], selected: set[str]
+) -> InlineKeyboardMarkup:
+    """Список серверов аккаунта Aternos с чекбоксами (для обновления списка).
+
+    Снятие галочки деактивирует сервер в БД, установка — (ре)активирует.
+    """
+    buttons: list[list[InlineKeyboardButton]] = []
+    for s in servers:
+        sid = str(s["aternos_id"])
+        name = str(s.get("display_name") or f"ID {sid}")
+        checked = "✅" if sid in selected else "⬜"
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{checked} {name}",
+                    callback_data=RefreshServerCb(action="toggle", aternos_id=sid).pack(),
+                )
+            ]
+        )
+    buttons.append(
+        [
+            InlineKeyboardButton(
+                text="✅ Готово",
+                callback_data=RefreshServerCb(action="done").pack(),
+            ),
+            InlineKeyboardButton(
+                text="❌ Отмена",
+                callback_data=RefreshServerCb(action="cancel").pack(),
+            ),
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_delete_account_kb() -> InlineKeyboardMarkup:
+    """Подтверждение удаления аккаунта владельца."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🗑 Да, удалить всё",
+                    callback_data=DeleteAccountCb(confirm=True).pack(),
+                ),
+                InlineKeyboardButton(
+                    text="↩️ Отмена",
+                    callback_data=DeleteAccountCb(confirm=False).pack(),
+                ),
+            ]
         ]
     )

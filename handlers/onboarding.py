@@ -1,4 +1,4 @@
-"""Онбординг владельца: кука Aternos -> выбор серверов -> аккаунт (multi-tenant).
+﻿"""Онбординг владельца: кука Aternos -> выбор серверов -> аккаунт (multi-tenant).
 
 Поток (в ЛС с ботом):
   1. Пользователь отправляет куку ATERNOS_SESSION — сообщение с кукой
@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from aiogram import F, Router
+from aiogram import Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -121,7 +121,7 @@ async def on_pick_server(
     state: FSMContext,
 ) -> None:
     """Чекбоксы выбора серверов и кнопка «Готово»."""
-    await callback_query.answer()  # сразу гасим «часики»
+    await callback_query.answer()
     data = await state.get_data()
     servers: list = data.get("servers", [])
     selected: set = set(data.get("selected", []))
