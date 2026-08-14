@@ -35,7 +35,6 @@ from keyboards.admin_kb import (
     PanelCb,
     PanelChatCb,
     PanelServerCb,
-    RefreshServerCb,
     UsersPageCb,
     get_chat_card_kb,
     get_delete_account_kb,
@@ -44,7 +43,6 @@ from keyboards.admin_kb import (
     get_owner_panel_kb,
     get_owner_servers_kb,
     get_owner_settings_kb,
-    get_refresh_servers_kb,
     get_server_card_kb,
     get_users_page_kb,
 )
@@ -65,11 +63,6 @@ class SessionRefreshState(StatesGroup):
     """FSM: ждём новую куку Aternos (кнопка «Обновить куку» в панели)."""
 
     waiting_cookie = State()
-
-
-# Список серверов аккаунта и текущий выбор для «Обновить серверы».
-_refresh_servers: dict[int, list[dict]] = {}
-_refresh_selection: dict[int, set[str]] = {}
 
 
 async def _safe_edit_text(message, text: str, reply_markup=None) -> None:
@@ -186,24 +179,50 @@ async def on_panel(
         except AternosError as exc:
             await _safe_edit_text(callback_query.message, f"❌ {exc}", get_owner_panel_kb())
             return
-        if not aternos_servers:
-            await _safe_edit_text(
-                callback_query.message, "❌ На аккаунте Aternos нет серверов.",
-                get_owner_panel_kb(),
-            )
-            return
         existing = await database.get_servers_by_owner(user.id)
-        existing_ids = {s["aternos_id"] for s in existing}
+        by_id = {s["aternos_id"]: s for s in existing}
         fetched_ids = {s["aternos_id"] for s in aternos_servers}
-        _refresh_servers[user.id] = aternos_servers
-        _refresh_selection[user.id] = existing_ids & fetched_ids
-        await _safe_edit_text(
-            callback_query.message,
-            "🔄 Серверы аккаунта Aternos.\n"
-            "☑️ отмечены подключённые. Снимите галочку — сервер отключится, "
-            "поставьте — подключится.",
-            get_refresh_servers_kb(aternos_servers, _refresh_selection[user.id]),
+        added: list[str] = []
+        reactivated: list[str] = []
+        removed: list[str] = []
+        touched_chat_ids: set[int] = set()
+        for s in aternos_servers:
+            aid = s["aternos_id"]
+            if aid in by_id:
+                if not by_id[aid]["is_active"]:
+                    await database.set_server_active(by_id[aid]["id"], True)
+                    reactivated.append(s["display_name"])
+            else:
+                server_id = await database.add_server(
+                    user.id, aid, s["server_ip"], s["display_name"]
+                )
+                if server_id is not None:
+                    added.append(s["display_name"])
+        for row in existing:
+            if row["aternos_id"] not in fetched_ids and row["is_active"]:
+                chats = await database.get_chats_for_server(row["id"])
+                touched_chat_ids.update(int(c["chat_id"]) for c in chats)
+                await database.unbind_server_from_all_chats(row["id"])
+                await database.deactivate_server(row["id"])
+                removed.append(row["display_name"])
+        await database.log_action(
+            user.id, "servers_refresh",
+            f"+{', '.join(added)} ~{', '.join(reactivated)} -{', '.join(removed)}",
         )
+        await _safe_edit_text(
+            callback_query.message, await _panel_text(user.id), get_owner_panel_kb()
+        )
+        if touched_chat_ids:
+            await dashboard.update_chats_dashboards(
+                callback_query.bot, sorted(touched_chat_ids)
+            )
+        parts = (
+            ([f"➕ Добавлены: {', '.join(added)}"] if added else [])
+            + ([f"↩️ Возвращены: {', '.join(reactivated)}"] if reactivated else [])
+            + ([f"➖ Отключены: {', '.join(removed)}"] if removed else [])
+        )
+        if parts:
+            await _safe_answer(callback_query, "\n".join(parts)[:200])
     elif action == "refresh_session":
         await state.set_state(SessionRefreshState.waiting_cookie)
         await _safe_edit_text(
@@ -225,7 +244,6 @@ async def on_panel(
             await _panel_text(user.id),
             get_owner_panel_kb(),
         )
-    await callback_query.answer()
 
 
 # ---------------------------------------------------------------------- #
@@ -254,7 +272,6 @@ async def on_panel_server(callback_query: CallbackQuery, callback_data: PanelSer
         f"<i>Настройка автоподтверждения — в разделе «Настройки».</i>",
         get_server_card_kb(server["id"], is_online),
     )
-    await callback_query.answer()
 
 
 @router.callback_query(PanelActionCb.filter())
@@ -266,7 +283,7 @@ async def on_panel_action(callback_query: CallbackQuery, callback_data: PanelAct
         return
     server = await database.get_server(int(callback_data.server_id))
     if server is None or server["owner_id"] != user.id:
-        await callback_query.answer("Сервер не найден.")
+        await _safe_answer(callback_query, "Сервер не найден.")
         return
 
     manager = AternosManager(user.id)
@@ -276,7 +293,7 @@ async def on_panel_action(callback_query: CallbackQuery, callback_data: PanelAct
             text = await manager.start_server(server["id"])
             dashboard.mark_as_starting(300)
             start_queue_watcher(callback_query.bot, user.id, server["id"])
-            await callback_query.answer(text)
+            await _safe_answer(callback_query, text)
             await dashboard.update_chats_dashboards(
                 callback_query.bot,
                 [int(c["chat_id"]) for c in await database.get_chats_by_owner(user.id)],
@@ -284,7 +301,7 @@ async def on_panel_action(callback_query: CallbackQuery, callback_data: PanelAct
         elif action == "stop":
             text = await manager.stop_server(server["id"])
             dashboard.clear_queue_position(server["id"])
-            await callback_query.answer(text)
+            await _safe_answer(callback_query, text)
             await dashboard.update_chats_dashboards(
                 callback_query.bot,
                 [int(c["chat_id"]) for c in await database.get_chats_by_owner(user.id)],
@@ -292,7 +309,7 @@ async def on_panel_action(callback_query: CallbackQuery, callback_data: PanelAct
         elif action == "confirm":
             await manager.confirm_server(server["id"])
             dashboard.clear_queue_position(server["id"])
-            await callback_query.answer("✅ Запуск подтверждён.")
+            await _safe_answer(callback_query, "✅ Запуск подтверждён.")
             await dashboard.update_chats_dashboards(
                 callback_query.bot,
                 [int(c["chat_id"]) for c in await database.get_chats_by_owner(user.id)],
@@ -303,7 +320,7 @@ async def on_panel_action(callback_query: CallbackQuery, callback_data: PanelAct
             await database.unbind_server_from_all_chats(server["id"])
             await database.deactivate_server(server["id"])
             await database.log_action(user.id, "server_deactivate", server["display_name"])
-            await callback_query.answer("Сервер отключён.")
+            await _safe_answer(callback_query, "Сервер отключён.")
             servers = await database.get_active_servers_by_owner(user.id)
             await _safe_edit_text(
                 callback_query.message,
@@ -313,92 +330,20 @@ async def on_panel_action(callback_query: CallbackQuery, callback_data: PanelAct
             if chat_ids:
                 await dashboard.update_chats_dashboards(callback_query.bot, chat_ids)
     except AternosError as exc:
-        await callback_query.answer(str(exc), show_alert=True)
+        await _safe_answer(callback_query, str(exc), show_alert=True)
     except Exception as exc:
         logger.exception("panel action %s failed: %s", action, exc)
-        await callback_query.answer(f"⚠️ Ошибка: {exc}", show_alert=True)
+        await _safe_answer(callback_query, f"⚠️ Ошибка: {exc}", show_alert=True)
 
 
-@router.callback_query(RefreshServerCb.filter())
-async def on_refresh_server(
-    callback_query: CallbackQuery, callback_data: RefreshServerCb
+async def _safe_answer(
+    callback_query: CallbackQuery, text: str = "", **kwargs
 ) -> None:
-    """Галочки при обновлении серверов; «Готово» применяет изменения в БД."""
-    user = callback_query.from_user
-    await callback_query.answer()
-    if user is None or not await _require_owner(callback_query, user.id):
-        return
-    servers = _refresh_servers.get(user.id)
-    if servers is None:
-        await callback_query.answer(
-            "Сессия обновления устарела — нажмите «🔄 Обновить серверы» заново."
-        )
-        return
-    selected = _refresh_selection.setdefault(user.id, set())
-
-    if callback_data.action == "toggle":
-        sid = callback_data.aternos_id
-        if sid in selected:
-            selected.discard(sid)
-        else:
-            selected.add(sid)
-        await _safe_edit_text(
-            callback_query.message,
-            "🔄 Серверы аккаунта Aternos.\n"
-            "☑️ отмечены подключённые. Снимите галочку — сервер отключится, "
-            "поставьте — подключится.",
-            get_refresh_servers_kb(servers, selected),
-        )
-        return
-
-    _refresh_servers.pop(user.id, None)
-    _refresh_selection.pop(user.id, None)
-    if callback_data.action == "cancel":
-        await _safe_edit_text(
-            callback_query.message, await _panel_text(user.id), get_owner_panel_kb()
-        )
-        return
-
-    existing = await database.get_servers_by_owner(user.id)
-    by_id = {s["aternos_id"]: s for s in existing}
-    added: list[str] = []
-    removed: list[str] = []
-    touched_chat_ids: set[int] = set()
-    for s in servers:
-        aid = s["aternos_id"]
-        if aid in selected:
-            if aid in by_id:
-                if not by_id[aid]["is_active"]:
-                    await database.set_server_active(by_id[aid]["id"], True)
-            else:
-                server_id = await database.add_server(
-                    user.id, aid, s["server_ip"], s["display_name"]
-                )
-                if server_id is not None:
-                    added.append(s["display_name"])
-        elif aid in by_id and by_id[aid]["is_active"]:
-            chats = await database.get_chats_for_server(by_id[aid]["id"])
-            touched_chat_ids.update(int(c["chat_id"]) for c in chats)
-            await database.unbind_server_from_all_chats(by_id[aid]["id"])
-            await database.deactivate_server(by_id[aid]["id"])
-            removed.append(by_id[aid]["display_name"])
-    await database.log_action(
-        user.id, "servers_refresh", f"+{', '.join(added)} -{', '.join(removed)}"
-    )
-    await _safe_edit_text(
-        callback_query.message, await _panel_text(user.id), get_owner_panel_kb()
-    )
-    if touched_chat_ids:
-        await dashboard.update_chats_dashboards(
-            callback_query.bot, sorted(touched_chat_ids)
-        )
-    if added or removed:
-        await callback_query.answer(
-            "\n".join(
-                ([f"➕ Добавлены: {', '.join(added)}"] if added else [])
-                + ([f"➖ Отключены: {', '.join(removed)}"] if removed else [])
-            )
-        )
+    """answer() с защитой: поздний ответ после долгих операций не роняет хендлер."""
+    try:
+        await callback_query.answer(text, **kwargs)
+    except TelegramBadRequest:
+        pass
 
 
 @router.callback_query(DeleteAccountCb.filter())

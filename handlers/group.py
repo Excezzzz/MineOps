@@ -227,7 +227,7 @@ async def on_server_action(callback_query: CallbackQuery, callback_data: ServerC
         if action == "start":
             text = await manager.start_server(server_id)
             dashboard.mark_as_starting(300)
-            await callback_query.answer(text)
+            await _safe_answer(callback_query, text)
             start_queue_watcher(callback_query.bot, owner["user_id"], server_id)
             await dashboard.update_chats_dashboards(callback_query.bot, [chat_id])
             other_chats = [
@@ -241,18 +241,28 @@ async def on_server_action(callback_query: CallbackQuery, callback_data: ServerC
         elif action == "stop":
             text = await manager.stop_server(server_id)
             dashboard.clear_queue_position(server_id)
-            await callback_query.answer(text)
+            await _safe_answer(callback_query, text)
             await dashboard.update_chats_dashboards(callback_query.bot, [chat_id])
         elif action == "confirm":
             await manager.confirm_server(server_id)
             dashboard.clear_queue_position(server_id)
-            await callback_query.answer("✅ Запуск подтверждён.")
+            await _safe_answer(callback_query, "✅ Запуск подтверждён.")
             await dashboard.update_chats_dashboards(callback_query.bot, [chat_id])
     except AternosError as exc:
-        await callback_query.answer(str(exc), show_alert=True)
+        await _safe_answer(callback_query, str(exc), show_alert=True)
     except Exception as exc:
         logger.exception("server action %s failed: %s", action, exc)
-        await callback_query.answer(f"⚠️ Ошибка: {exc}", show_alert=True)
+        await _safe_answer(callback_query, f"⚠️ Ошибка: {exc}", show_alert=True)
+
+
+async def _safe_answer(
+    callback_query: CallbackQuery, text: str = "", **kwargs
+) -> None:
+    """answer() с защитой: поздний ответ после долгих операций не роняет хендлер."""
+    try:
+        await callback_query.answer(text, **kwargs)
+    except TelegramBadRequest:
+        pass
 
 
 @router.callback_query(F.data == "refresh_dashboard")
@@ -261,7 +271,7 @@ async def on_refresh_dashboard(callback_query: CallbackQuery) -> None:
     await callback_query.answer()  # мгновенно убираем спиннер кнопки
     if callback_query.message.chat and callback_query.message.chat.type != "private":
         await dashboard._update_chat_dashboard(callback_query.bot, int(callback_query.message.chat.id))
-        await callback_query.answer("🔄 Дашборд обновлён.")
+        await _safe_answer(callback_query, "🔄 Дашборд обновлён.")
     else:
         await callback_query.answer()
 

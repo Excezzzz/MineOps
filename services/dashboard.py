@@ -201,10 +201,15 @@ async def _update_chat_dashboard(bot: Bot, chat_id: int) -> None:
 async def _update_owner_pm_dashboard(bot: Bot, owner: dict, merged: list[dict]) -> None:
     """Закреплённый дашборд владельца в ЛС: обновляет или (пере)создаёт.
 
-    merged — список серверов со статусами (как у format_dashboard_text).
-    Кнопки управления в ЛС не показываем — они работают только в группах.
+    merged — список серверов со статусами (как у format_dashboard_text);
+    пустой список — рендерится заглушка, чтобы пин не был устаревшим.
     """
-    text = format_dashboard_text(merged)
+    text = (
+        format_dashboard_text(merged)
+        if merged
+        else "🔴 <b>Нет подключённых серверов.</b>\n"
+        "Откройте /panel и нажмите «🔄 Обновить серверы»."
+    )
     pm_pinned = await database.get_owner_pm_pinned(int(owner["user_id"]))
     if pm_pinned:
         try:
@@ -214,8 +219,13 @@ async def _update_owner_pm_dashboard(bot: Bot, owner: dict, merged: list[dict]) 
                 message_id=pm_pinned,
             )
             return
-        except TelegramBadRequest:
-            return  # контент не изменился — дашборд актуален
+        except TelegramBadRequest as exc:
+            if "message is not modified" in str(exc):
+                return  # контент не изменился — дашборд актуален
+            logger.warning(
+                "owner %s: edit PM dashboard failed (%s), will re-send",
+                owner["user_id"], exc,
+            )
         except TelegramAPIError as exc:
             logger.warning(
                 "owner %s: edit PM dashboard failed (%s), will re-send",
@@ -280,18 +290,54 @@ async def update_dashboards(bot: Bot) -> None:
                 )
         for chat in await database.get_chats_by_owner(owner["user_id"]):
             await _update_chat_dashboard(bot, int(chat["chat_id"]))
-        # Закреплённый дашборд в ЛС со статусами ВСЕХ серверов владельца.
-        if servers:
-            pm_merged = [
-                {**s, **statuses_by_server.get(int(s["id"]), {})} for s in servers
-            ]
-            await _update_owner_pm_dashboard(bot, owner, pm_merged)
+        # Закреплённый дашборд в ЛС: статусы ВСЕХ серверов владельца.
+        pm_merged = [
+            {**s, **statuses_by_server.get(int(s["id"]), {})} for s in servers
+        ]
+        await _update_owner_pm_dashboard(bot, owner, pm_merged)
 
 
 async def update_chats_dashboards(bot: Bot, chat_ids: list[int]) -> None:
     """Обновляет дашборды в конкретных чатах (после запуска/остановки)."""
     for chat_id in chat_ids:
         await _update_chat_dashboard(bot, chat_id)
+
+
+# Владельцы, которым уже отправлено уведомление о просроченной куке.
+_session_broken_notified: set[int] = set()
+
+
+async def check_all_sessions(bot: Bot) -> None:
+    """Проверяет куки всех владельцев; при просрочке шлёт уведомление в ЛС.
+
+    Уведомление отправляется один раз за период просрочки (до восстановления).
+    """
+    from services.aternos_api import AternosError, AternosManager
+
+    owners = await database.get_all_owners()
+    for owner in owners:
+        uid = int(owner["user_id"])
+        try:
+            await AternosManager(uid).check_session()
+        except AternosError as exc:
+            if "Cloudflare" in str(exc):
+                continue  # временный бан запросов — не про куку
+            if uid in _session_broken_notified:
+                continue
+            _session_broken_notified.add(uid)
+            await database.log_action(uid, "session_expired", "кука Aternos просрочена")
+            try:
+                await bot.send_message(
+                    uid,
+                    "⚠️ <b>Кука Aternos просрочена или недействительна!</b>\n\n"
+                    "Обновите её: /set_session или кнопка «🔄 Обновить куку» в панели /panel.",
+                )
+            except Exception as exc2:
+                logger.warning(
+                    "owner %s: не удалось отправить уведомление о куке: %s", uid, exc2
+                )
+            continue
+        _session_broken_notified.discard(uid)
 
 
 async def broadcast_message(bot: Bot, chat_ids: list[int], text: str) -> None:

@@ -190,6 +190,19 @@ class AternosManager:
                     ) from exc
                 raise AternosError(f"Не удалось выполнить запрос к Aternos: {exc}") from exc
 
+    def _check_session_sync(self, cookie: str) -> bool:
+        """Проверяет куку: вход в аккаунт без обращения к серверам.
+
+        Используется фоновой проверкой: дешевле, чем list_servers.
+        """
+        client = Client()
+        client.login_with_session(cookie)
+        return True
+
+    async def check_session(self) -> None:
+        """Проверяет куку владельца из БД; AternosError если просрочена."""
+        await self._run(self._check_session_sync)
+
     async def list_account_servers(self) -> List[dict]:
         """Серверы аккаунта владельца (для онбординга и панели)."""
         return await self._run(self._list_servers_sync)

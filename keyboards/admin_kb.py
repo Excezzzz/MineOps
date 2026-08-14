@@ -33,11 +33,6 @@ class OwnerSettingsCb(CallbackData, prefix="oset"):
     action: str     # "auto_confirm" | "lockdown"
     enabled: bool   # целевое значение (вкл/выкл)
 
-# Обновление серверов из аккаунта Aternos (чекбоксы как при онбординге).
-class RefreshServerCb(CallbackData, prefix="rsrv"):
-    action: str         # "toggle" | "done" | "cancel"
-    aternos_id: str = ""
-
 # Подтверждение удаления аккаунта.
 class DeleteAccountCb(CallbackData, prefix="delacc"):
     confirm: bool
@@ -220,41 +215,6 @@ def get_owner_audit_kb() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="🔙 Назад", callback_data=PanelCb(action="back").pack())]
         ]
     )
-
-
-def get_refresh_servers_kb(
-    servers: list[dict], selected: set[str]
-) -> InlineKeyboardMarkup:
-    """Список серверов аккаунта Aternos с чекбоксами (для обновления списка).
-
-    Снятие галочки деактивирует сервер в БД, установка — (ре)активирует.
-    """
-    buttons: list[list[InlineKeyboardButton]] = []
-    for s in servers:
-        sid = str(s["aternos_id"])
-        name = str(s.get("display_name") or f"ID {sid}")
-        checked = "✅" if sid in selected else "⬜"
-        buttons.append(
-            [
-                InlineKeyboardButton(
-                    text=f"{checked} {name}",
-                    callback_data=RefreshServerCb(action="toggle", aternos_id=sid).pack(),
-                )
-            ]
-        )
-    buttons.append(
-        [
-            InlineKeyboardButton(
-                text="✅ Готово",
-                callback_data=RefreshServerCb(action="done").pack(),
-            ),
-            InlineKeyboardButton(
-                text="❌ Отмена",
-                callback_data=RefreshServerCb(action="cancel").pack(),
-            ),
-        ]
-    )
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def get_delete_account_kb() -> InlineKeyboardMarkup:

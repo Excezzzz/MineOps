@@ -41,6 +41,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 UPDATE_INTERVAL = 30  # сек: период обновления дашбордов
+SESSION_CHECK_INTERVAL = 5 * 60  # сек: период проверки кук владельцев
 
 
 async def update_dashboards_job(bot: Bot) -> None:
@@ -48,6 +49,13 @@ async def update_dashboards_job(bot: Bot) -> None:
     from services.dashboard import update_dashboards
 
     await update_dashboards(bot)
+
+
+async def check_sessions_job(bot: Bot) -> None:
+    """Проверяет куки владельцев; уведомляет в ЛС о просроченных."""
+    from services.dashboard import check_all_sessions
+
+    await check_all_sessions(bot)
 
 
 async def main() -> None:
@@ -103,8 +111,17 @@ async def main() -> None:
             replace_existing=True,
             max_instances=1,
         )
+        scheduler.add_job(
+            check_sessions_job,
+            IntervalTrigger(seconds=SESSION_CHECK_INTERVAL),
+            args=[bot],
+            id="sessions",
+            replace_existing=True,
+            max_instances=1,
+        )
         scheduler.start()
-        logger.info("scheduler: дашборды каждые %s c", UPDATE_INTERVAL)
+        logger.info("scheduler: дашборды каждые %s c, проверка кук каждые %s c",
+                    UPDATE_INTERVAL, SESSION_CHECK_INTERVAL)
 
     @dp.shutdown()
     async def on_shutdown(bot: Bot, **kwargs) -> None:
