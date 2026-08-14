@@ -479,13 +479,15 @@ class Database:
         row = await cur.fetchone()
         return dict(row) if row is not None else None
 
-    async def get_chat_owner(self, chat_id: int) -> Optional[int]:
-        """owner_id владельца чата (None — чат не привязан)."""
+    async def get_chat_owner(self, chat_id: int) -> Optional[dict]:
+        """Строка владельца (owners) привязанного чата; None — чат не привязан."""
         cur = await self.conn.execute(
-            "SELECT owner_id FROM chats WHERE chat_id = ?", (chat_id,)
+            "SELECT o.* FROM chats c JOIN owners o ON o.user_id = c.owner_id "
+            "WHERE c.chat_id = ?",
+            (chat_id,),
         )
         row = await cur.fetchone()
-        return int(row["owner_id"]) if row is not None else None
+        return dict(row) if row is not None else None
 
     async def chat_exists(self, chat_id: int) -> bool:
         cur = await self.conn.execute("SELECT 1 FROM chats WHERE chat_id = ?", (chat_id,))
@@ -838,8 +840,8 @@ async def get_chat(chat_id: int) -> Optional[dict]:
     return await get_db().get_chat(chat_id)
 
 
-async def get_chat_owner(chat_id: int) -> Optional[int]:
-    """owner_id владельца чата (обёртка)."""
+async def get_chat_owner(chat_id: int) -> Optional[dict]:
+    """Строка владельца привязанного чата (обёртка)."""
     return await get_db().get_chat_owner(chat_id)
 
 
