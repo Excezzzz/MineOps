@@ -131,30 +131,44 @@ def format_dashboard_text(servers: list[dict]) -> str:
         players_online = s.get("players_online", 0)
         players_max = s.get("players_max", 0)
         player_list = s.get("player_list") or []
-        if player_list:
-            players_line = "👥 Игроки ({}/{}):\n{}".format(
-                players_online,
-                players_max,
-                "\n".join(f"• {quote_html(str(n))}" for n in player_list[:20]),
-            )
-        else:
-            players_line = f"👥 Игроки: {players_online}/{players_max}"
+        lines = [status_line, f"🌐 IP: {quote_html(ip)}"]
+        if is_online:
+            # Игроки показываются только у живого сервера: у оффлайн-сервера
+            # цифры «0/0» только путают (сервер даже не поднят).
+            if player_list:
+                players_line = "👥 Игроки ({}/{}):\n{}".format(
+                    players_online,
+                    players_max,
+                    "\n".join(f"• {quote_html(str(n))}" for n in player_list[:20]),
+                )
+            else:
+                players_line = f"👥 Игроки: {players_online}/{players_max}"
+            lines.append(players_line)
+        lines.append(f"📦 Версия: {quote_html(str(s.get('version', 'Неизвестно')) or 'Неизвестно')}")
 
-        blocks.append(
-            "\n".join(
-                [
-                    status_line,
-                    f"🌐 IP: {quote_html(ip)}",
-                    players_line,
-                    f"📦 Версия: {quote_html(str(s.get('version', 'Неизвестно')) or 'Неизвестно')}",
-                ]
-            )
-        )
+        blocks.append("\n".join(lines))
     return "\n\n".join(blocks)
 
 
 # Чаты, которым уже отправлена подсказка о правах администратора (для пина).
 _pin_notice_sent: set[int] = set()
+# Чаты, где пин дашборда ещё не удался: пока чат в этом сете, каждый тик
+# пробуем закрепить снова. Без этого дашборд, созданный ДО выдачи боту
+# прав админа, остался бы незакреплённым навсегда (тики правят сообщение,
+# но не перепинивают его).
+_pin_pending: set[int] = set()
+
+
+async def _try_pin(bot: Bot, chat_id: int, message_id: int) -> bool:
+    """Пробует закрепить сообщение; True — закреплено."""
+    try:
+        await bot.pin_chat_message(
+            chat_id=chat_id, message_id=message_id, disable_notification=True
+        )
+        return True
+    except Exception as exc:
+        logger.warning("chat %s: не удалось закрепить дашборд (%s)", chat_id, exc)
+        return False
 
 
 async def _render_dashboard(bot: Bot, chat_id: int, text: str, kb) -> None:
@@ -172,6 +186,11 @@ async def _render_dashboard(bot: Bot, chat_id: int, text: str, kb) -> None:
             await bot.edit_message_text(
                 text=text, chat_id=chat_id, message_id=pinned_msg_id, reply_markup=kb
             )
+            if chat_id in _pin_pending:
+                # Сообщение живое, но пин ранее не удался (прав не было) —
+                # теперь есть права, пробуем дозакрепить.
+                if await _try_pin(bot, chat_id, pinned_msg_id):
+                    _pin_pending.discard(chat_id)
             return
         except TelegramAPIError as exc:
             if "message is not modified" in str(exc):
@@ -185,23 +204,19 @@ async def _render_dashboard(bot: Bot, chat_id: int, text: str, kb) -> None:
         logger.warning("chat %s: cannot send dashboard (%s)", chat_id, exc)
         return
 
-    pinned_ok = False
-    try:
-        await bot.pin_chat_message(
-            chat_id=chat_id, message_id=msg.message_id, disable_notification=True
-        )
-        pinned_ok = True
-    except Exception as exc:
-        logger.warning("chat %s: не удалось закрепить дашборд (%s)", chat_id, exc)
+    pinned_ok = await _try_pin(bot, chat_id, msg.message_id)
 
     # Сохраняем id всегда: при неудачном пине следующий тик будет править
     # новое сообщение, а не плодить новые.
     await database.set_chat_pinned_msg(chat_id, msg.message_id)
 
     if pinned_ok:
+        _pin_pending.discard(chat_id)
         _pin_notice_sent.discard(chat_id)
         logger.info("чат %s: дашборд создан и закреплён (msg %s)", chat_id, msg.message_id)
-    elif chat_id not in _pin_notice_sent:
+    else:
+        _pin_pending.add(chat_id)
+        if chat_id not in _pin_notice_sent:
         _pin_notice_sent.add(chat_id)
         try:
             await bot.send_message(
