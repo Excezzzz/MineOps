@@ -43,6 +43,11 @@ class AternosManager:
     # Кеш клиентов: owner_id -> (Client, время создания). Ключ инвалидируется
     # при обновлении куки (update_session) и истечении TTL.
     _client_cache: Dict[int, Tuple[Client, float]] = {}
+    # Кулдаун логина при Cloudflare-бане: owner_id -> время, до которого
+    # логин не пытаемся. Без этого дашборд и проверка сессий вдвоём
+    # молотили бы login_with_session каждые 5 минут (у каждого своя
+    # ошибка) и продлевали бан.
+    _login_fail_until: Dict[int, float] = {}
     # Блокировки per-owner: последовательные обращения к Aternos в рамках
     # одного аккаунта не пересекаются (защита от Cloudflare-бана).
     _locks: Dict[int, asyncio.Lock] = {}
@@ -58,6 +63,12 @@ class AternosManager:
         cached = self._client_cache.get(self.owner_id)
         if cached and time.monotonic() - cached[1] < CLIENT_TTL_SECONDS:
             return cached[0]
+        if time.monotonic() < self._login_fail_until.get(self.owner_id, 0):
+            # Бан ещё не прошёл: не дёргаем Aternos, отвечаем мгновенно.
+            raise AternosError(
+                "⚠️ Aternos временно заблокировал запрос (Cloudflare). "
+                "Подождите 3-5 минут или обновите куку /set_session."
+            )
 
         client = Client()
         try:
@@ -68,6 +79,7 @@ class AternosManager:
                 # Это не просроченная кука, а временный бан запросов —
                 # фоновые проверки должны пропустить его, а не слать
                 # ложное уведомление «кука просрочена».
+                self._login_fail_until[self.owner_id] = time.monotonic() + 5 * 60
                 raise AternosError(
                     "⚠️ Aternos временно заблокировал запрос (Cloudflare). "
                     "Подождите 3-5 минут или обновите куку /set_session."
@@ -78,6 +90,7 @@ class AternosManager:
             ) from e
 
         self._client_cache[self.owner_id] = (client, time.monotonic())
+        self._login_fail_until.pop(self.owner_id, None)
         return client
 
     def _get_server_sync(self, client: Client, aternos_id: str) -> AternosServer:
