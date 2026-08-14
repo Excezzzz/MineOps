@@ -226,8 +226,11 @@ async def _render_dashboard(bot: Bot, chat_id: int, text: str, kb) -> None:
                     "Настройки группы → Управление группами → администраторы → "
                     "добавить бота.",
                 )
-        except Exception as exc:
-            logger.warning("chat %s: не удалось отправить подсказку о закрепе: %s", chat_id, exc)
+            except Exception as exc:
+                logger.warning(
+                    "chat %s: не удалось отправить подсказку о закрепе: %s",
+                    chat_id, exc,
+                )
 
 
 async def _get_panel_cached(owner_id: int, server_id: int) -> dict | None:
