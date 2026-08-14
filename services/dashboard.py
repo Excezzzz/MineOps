@@ -219,13 +219,13 @@ async def _render_dashboard(bot: Bot, chat_id: int, text: str, kb) -> None:
         if chat_id not in _pin_notice_sent:
             _pin_notice_sent.add(chat_id)
             try:
-            await bot.send_message(
-                chat_id,
-                "⚠️ <b>Дайте боту права администратора в этой группе</b>, "
-                "чтобы он мог закреплять дашборд.\n"
-                "Настройки группы → Управление группами → администраторы → "
-                "добавить бота.",
-            )
+                await bot.send_message(
+                    chat_id,
+                    "⚠️ <b>Дайте боту права администратора в этой группе</b>, "
+                    "чтобы он мог закреплять дашборд.\n"
+                    "Настройки группы → Управление группами → администраторы → "
+                    "добавить бота.",
+                )
         except Exception as exc:
             logger.warning("chat %s: не удалось отправить подсказку о закрепе: %s", chat_id, exc)
 
