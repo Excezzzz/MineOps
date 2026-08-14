@@ -59,7 +59,7 @@ def _log_mem_top() -> None:
         return
     try:
         snapshot = tracemalloc.take_snapshot()
-        for stat in snapshot.statistics("lineno", limit=8):
+        for stat in snapshot.statistics("lineno")[:8]:
             frame = stat.traceback.format()[0]
             logger.info(
                 "MEMTOP %.1f MB / %d allocs <- %s",
