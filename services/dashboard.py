@@ -34,7 +34,10 @@ _queue_positions: dict[int, int] = {}
 # Панель — авторитетный источник online/offline; кеш спасает от Cloudflare-банов
 # (молотить Aternos каждые 30 с нельзя) и от врущего legacy-пинга.
 _panel_cache: dict[int, tuple[float, dict]] = {}
-PANEL_TTL_SECONDS = 60  # свежесть статуса панели
+# Бэкофф при Cloudflare-бане: server_id -> время, до которого панель не дёргаем.
+_panel_fail_until: dict[int, float] = {}
+PANEL_TTL_SECONDS = 60          # свежесть статуса панели
+PANEL_FAIL_COOLDOWN = 5 * 60    # после неудачи панель не трогаем 5 минут
 
 
 async def _ensure_server_port(owner_id: int, server_id: int) -> int | None:
@@ -213,25 +216,34 @@ async def _render_dashboard(bot: Bot, chat_id: int, text: str, kb) -> None:
 
 
 async def _get_panel_cached(owner_id: int, server_id: int) -> dict | None:
-    """Статус панели Aternos с кешем (PANEL_TTL_SECONDS).
+    """Статус панели Aternos с кешем (PANEL_TTL_SECONDS) и бэкоффом.
 
     Возвращает панельный словарь; None — панель недоступна и кеша нет.
-    При недоступности панели используется устаревший кеш (лучше, чем ничего).
+    При недоступности панели используется устаревший кеш (лучше, чем ничего);
+    после неудачного запроса панель не дёргается PANEL_FAIL_COOLDOWN — так
+    Cloudflare-бан не усугубляется нашей же молотилкой.
     """
     cached = _panel_cache.get(server_id)
     now = time.monotonic()
     if cached and now - cached[0] < PANEL_TTL_SECONDS:
         return cached[1]
+    if now < _panel_fail_until.get(server_id, 0):
+        return cached[1] if cached else None  # бэкофф: ждём, не дёргаем панель
     from services.aternos_api import AternosError, AternosManager
 
     try:
         panel = await AternosManager(owner_id).get_panel_status(server_id)
     except AternosError as exc:
-        logger.warning("server %s: статус панели не получен: %s", server_id, exc)
+        logger.warning(
+            "server %s: статус панели не получен (%s) — бэкофф %s c",
+            server_id, exc, PANEL_FAIL_COOLDOWN,
+        )
+        _panel_fail_until[server_id] = now + PANEL_FAIL_COOLDOWN
         if cached:
             return cached[1]  # устаревший кеш лучше, чем врущий legacy-пинг
         return None
     _panel_cache[server_id] = (now, panel)
+    _panel_fail_until.pop(server_id, None)
     return panel
 
 
