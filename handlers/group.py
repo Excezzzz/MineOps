@@ -1,16 +1,15 @@
 ﻿"""Групповой роутер (multi-tenant): дашборд, кнопки серверов, /link, доступ.
 
-- /link — владелец привязывает чат; серверы для чата выбирает в ЛС
-  (/panel -> 💬 Чаты -> «🔗 Серверы чата»);
-- /unlink — владелец отвязывает чат (дашборд удаляется);
-- /status — ручное обновление дашборда (владелец и участники с доступом);
-- кнопки дашборда: старт/стоп/подтверждение очереди (ServerCb);
-- запрос доступа участника уходит ВЛАДЕЛЬЦУ ЧАТА (ReqAccessCb/ApproveAccessCb);
-- /help — динамическая справка по роли.
-
-Управление серверами доступно владельцу чата и участникам с has_access
-(кроме lockdown — тогда только владелец); остальные получают отказ.
-Ошибки Aternos показываются алертом, бот продолжает работать.
+Строгие правила доступа:
+  * /link — ТОЛЬКО владелец сервера (зарегистрированный owner); посторонним
+    команда отвечает молча (ни ответа, ни подсказок);
+  * /unlink — только владелец чата (IsOwnerFilter + проверка ownership);
+  * /status и кнопка «🔄 Обновить» — владелец и участники с has_access;
+  * кнопки старт/стоп/подтверждение — владелец и участники с has_access
+    (при локдауне — только владелец); посторонний получает отказ и ничего
+    не происходит;
+  * запрос доступа уходит ВЛАДЕЛЬЦУ ЧАТА (ReqAccessCb/ApproveAccessCb);
+  * /help — динамическая справка по роли.
 """
 
 from __future__ import annotations
@@ -91,18 +90,17 @@ async def _require_chat_permission(callback_query: CallbackQuery) -> tuple | Non
 # ---------------------------------------------------------------------- #
 @router.message(F.chat.type.in_({"group", "supergroup"}), Command("link"))
 async def link_command(message: Message) -> None:
-    """Привязка чата: только для зарегистрированного владельца.
+    """Привязка чата: ТОЛЬКО для владельца сервера (зарегистрированный owner).
 
-    Чат регистрируется БЕЗ серверов — владелец сам выбирает, какие серверы
-    будут доступны в этой группе: ЛС с ботом -> /panel -> 💬 Чаты ->
-    «🔗 Серверы чата». Дашборд создаётся, когда подключён первый сервер.
+    Остальные не получают ответа вообще — /link не должен ничего сообщать
+    посторонним. Чат регистрируется БЕЗ серверов — владелец сам выбирает,
+    какие серверы будут доступны в этой группе: ЛС с ботом -> /panel ->
+    💬 Чаты -> «🔗 Серверы чата». Дашборд создаётся после подключения
+    первого сервера.
     """
     user = message.from_user
-    if user is None:
-        return
-    if await database.get_owner(user.id) is None:
-        await message.answer("❌ Ты не зарегистрирован. Напиши мне в ЛС /start чтобы пройти онбординг")
-        return
+    if user is None or not await database.is_owner(user.id):
+        return  # молча: только владелец сервера
 
     chat_id = int(message.chat.id)
     chat = await database.get_chat(chat_id)
@@ -245,13 +243,25 @@ async def _safe_answer(
 
 @router.callback_query(F.data == "refresh_dashboard")
 async def on_refresh_dashboard(callback_query: CallbackQuery) -> None:
-    """Кнопка «Обновить» на дашборде — принудительный апдейт."""
+    """Кнопка «Обновить» на дашборде — принудительный апдейт.
+
+    Разрешён только владельцу чата и участникам с доступом; остальные
+    получают пустой ответ (кнопка не сработает).
+    """
     await callback_query.answer()  # мгновенно убираем спиннер кнопки
-    if callback_query.message.chat and callback_query.message.chat.type != "private":
-        await dashboard._update_chat_dashboard(callback_query.bot, int(callback_query.message.chat.id))
-        await _safe_answer(callback_query, "🔄 Дашборд обновлён.")
-    else:
-        await callback_query.answer()
+    if not callback_query.message.chat or callback_query.message.chat.type == "private":
+        return
+    user = callback_query.from_user
+    if user is None:
+        return
+    chat_id = int(callback_query.message.chat.id)
+    owner = await database.get_chat_owner(chat_id)
+    if owner is None:
+        return
+    if user.id != owner["user_id"] and not await database.user_can_manage(chat_id, user.id):
+        return  # нет доступа — молча
+    await dashboard._update_chat_dashboard(callback_query.bot, chat_id)
+    await _safe_answer(callback_query, "🔄 Дашборд обновлён.")
 
 
 # ---------------------------------------------------------------------- #
