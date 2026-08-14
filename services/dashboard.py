@@ -217,8 +217,8 @@ async def _render_dashboard(bot: Bot, chat_id: int, text: str, kb) -> None:
     else:
         _pin_pending.add(chat_id)
         if chat_id not in _pin_notice_sent:
-        _pin_notice_sent.add(chat_id)
-        try:
+            _pin_notice_sent.add(chat_id)
+            try:
             await bot.send_message(
                 chat_id,
                 "⚠️ <b>Дайте боту права администратора в этой группе</b>, "
