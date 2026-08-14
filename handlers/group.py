@@ -9,7 +9,7 @@
 - /help — динамическая справка по роли.
 
 Управление серверами доступно владельцу чата и участникам с has_access
-(кроме lockdown — тогда только владелец); кнопка ⏹ Стоп — ТОЛЬКО владельцу.
+(кроме lockdown — тогда только владелец); остальные получают отказ.
 Ошибки Aternos показываются алертом, бот продолжает работать.
 """
 
@@ -171,7 +171,7 @@ async def help_command(message: Message) -> None:
             "/status — обновить дашборд вручную\n"
             "/emergency — локдаун (в ЛС с ботом)\n\n"
             "<b>Кнопки дашборда:</b>\n"
-            "▶️ Старт · ⏹ Стоп (только владелец) · ✅ Подтвердить очередь"
+            "▶️ Старт · ⏹ Стоп · ✅ Подтвердить очередь"
         )
     else:
         await message.answer(
@@ -196,18 +196,9 @@ async def on_server_action(callback_query: CallbackQuery, callback_data: ServerC
     if perm is None:
         return
     owner, _ = perm
-    user = callback_query.from_user
     chat_id = int(callback_query.message.chat.id)
     server_id = int(callback_data.server_id)
     action = callback_data.action
-
-    if action == "stop" and (user is None or user.id != owner["user_id"]):
-        await _safe_answer(
-            callback_query,
-            "⏹ Останавливать сервер может только владелец.",
-            show_alert=True,
-        )
-        return
 
     manager = AternosManager(owner["user_id"])
     try:

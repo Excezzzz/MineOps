@@ -144,11 +144,17 @@ def format_dashboard_text(servers: list[dict]) -> str:
     return "\n\n".join(blocks)
 
 
+# Чаты, которым уже отправлена подсказка о правах администратора (для пина).
+_pin_notice_sent: set[int] = set()
+
+
 async def _render_dashboard(bot: Bot, chat_id: int, text: str, kb) -> None:
     """Обновляет или (пере)создаёт закреплённый дашборд в одном чате.
 
     Любые Telegram-ошибки (сообщение удалено, нет прав на закрепление)
     перехватываются, чтобы сбой в одном чате не ронял остальные.
+    id нового сообщения сохраняется ВСЕГДА — даже без закрепления, иначе
+    следующий тик снова попытается править удалённое и заспамит чат.
     """
     pinned_msg_id = await database.get_chat_pinned_msg(chat_id)
 
@@ -166,13 +172,38 @@ async def _render_dashboard(bot: Bot, chat_id: int, text: str, kb) -> None:
 
     try:
         msg = await bot.send_message(chat_id=chat_id, text=text, reply_markup=kb)
+    except (TelegramAPIError, AttributeError) as exc:
+        logger.warning("chat %s: cannot send dashboard (%s)", chat_id, exc)
+        return
+
+    pinned_ok = False
+    try:
         await bot.pin_chat_message(
             chat_id=chat_id, message_id=msg.message_id, disable_notification=True
         )
-        await database.set_chat_pinned_msg(chat_id, msg.message_id)
+        pinned_ok = True
+    except Exception as exc:
+        logger.warning("chat %s: не удалось закрепить дашборд (%s)", chat_id, exc)
+
+    # Сохраняем id всегда: при неудачном пине следующий тик будет править
+    # новое сообщение, а не плодить новые.
+    await database.set_chat_pinned_msg(chat_id, msg.message_id)
+
+    if pinned_ok:
+        _pin_notice_sent.discard(chat_id)
         logger.info("чат %s: дашборд создан и закреплён (msg %s)", chat_id, msg.message_id)
-    except (TelegramAPIError, AttributeError) as exc:
-        logger.warning("chat %s: cannot create dashboard (%s)", chat_id, exc)
+    elif chat_id not in _pin_notice_sent:
+        _pin_notice_sent.add(chat_id)
+        try:
+            await bot.send_message(
+                chat_id,
+                "⚠️ <b>Дайте боту права администратора в этой группе</b>, "
+                "чтобы он мог закреплять дашборд.\n"
+                "Настройки группы → Управление группами → администраторы → "
+                "добавить бота.",
+            )
+        except Exception as exc:
+            logger.warning("chat %s: не удалось отправить подсказку о закрепе: %s", chat_id, exc)
 
 
 async def get_status_with_panel(
@@ -279,18 +310,27 @@ async def _update_owner_pm_dashboard(bot: Bot, owner: dict, merged: list[dict]) 
             )
     try:
         msg = await bot.send_message(int(owner["user_id"]), text=text)
+    except Exception as exc:
+        logger.warning("owner %s: PM-дашборд не отправлен: %s", owner["user_id"], exc)
+        return
+    pinned_ok = False
+    try:
         await bot.pin_chat_message(
             chat_id=int(owner["user_id"]),
             message_id=msg.message_id,
             disable_notification=True,
         )
-        await database.set_owner_pm_pinned(int(owner["user_id"]), msg.message_id)
+        pinned_ok = True
+    except Exception as exc:
+        logger.warning("owner %s: PM-дашборд не закреплён: %s", owner["user_id"], exc)
+    # id сохраняется всегда — при неудачном пине следующий тик правит
+    # новое сообщение, а не плодит новые.
+    await database.set_owner_pm_pinned(int(owner["user_id"]), msg.message_id)
+    if pinned_ok:
         logger.info(
             "owner %s: PM-дашборд создан и закреплён (msg %s)",
             owner["user_id"], msg.message_id,
         )
-    except Exception as exc:
-        logger.warning("owner %s: PM-дашборд не создан: %s", owner["user_id"], exc)
 
 
 async def update_dashboards(bot: Bot) -> None:
