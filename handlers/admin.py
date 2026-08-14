@@ -34,6 +34,7 @@ from keyboards.admin_kb import (
     PanelActionCb,
     PanelCb,
     PanelChatCb,
+    PanelChatServerCb,
     PanelServerCb,
     UsersPageCb,
     get_chat_card_kb,
@@ -260,6 +261,7 @@ async def on_panel_server(callback_query: CallbackQuery, callback_data: PanelSer
         await callback_query.answer("Сервер не найден.")
         return
     status = await mcsrvstat.get_server_status(server["server_ip"])
+    status = await dashboard.get_status_with_panel(user.id, server, status)
     is_online = bool(status["is_online"])
     state_text = "🟢 ОНЛАЙН" if is_online else "🔴 ОФФЛАЙН"
     await _safe_edit_text(
@@ -425,16 +427,11 @@ async def on_panel_chat(callback_query: CallbackQuery, callback_data: PanelChatC
 
     if callback_data.action == "select":
         servers = await database.get_chat_servers(chat_id)
-        linked = ", ".join(
-            s["display_name"] for s in servers
-        ) or "нет"
+        linked_ids = {int(s["id"]) for s in servers}
         await _safe_edit_text(
             callback_query.message,
-            f"💬 <b>{quote_html(chat['title'] or str(chat_id))}</b>\n"
-            f"ID: <code>{chat_id}</code>\n"
-            f"Серверы: {quote_html(linked)}\n\n"
-            "Управление привязками — командой /link в самом чате.",
-            get_chat_card_kb(chat_id),
+            await _chat_card_text(chat, chat_id, servers),
+            get_chat_card_kb(chat_id, await _chat_card_servers(user.id), linked_ids),
         )
     elif callback_data.action == "unlink":
         pinned = await database.get_chat_pinned_msg(chat_id)
@@ -471,6 +468,69 @@ async def on_users_page(callback_query: CallbackQuery, callback_data: UsersPageC
         await callback_query.answer("Чат не найден или не принадлежит вам.")
         return
     await _show_users_page(callback_query, user.id, chat_id, max(int(callback_data.page), 0))
+
+
+async def _chat_card_servers(owner_id: int) -> list[dict]:
+    """Все активные серверы владельца для карточки чата (переключатели)."""
+    return await database.get_active_servers_by_owner(owner_id)
+
+
+async def _chat_card_text(chat: dict, chat_id: int, servers: list[dict]) -> str:
+    """Текст карточки чата: заголовок и привязанные серверы."""
+    linked = ", ".join(s["display_name"] for s in servers) or "нет"
+    return (
+        f"💬 <b>{quote_html(chat['title'] or str(chat_id))}</b>\n"
+        f"ID: <code>{chat_id}</code>\n"
+        f"🔗 Серверы в группе: {quote_html(linked)}\n\n"
+        "Нажмите на сервер, чтобы подключить или отключить его в этой группе:"
+    )
+
+
+@router.callback_query(PanelChatServerCb.filter())
+async def on_panel_chat_server(
+    callback_query: CallbackQuery, callback_data: PanelChatServerCb
+) -> None:
+    """Подключить/отключить сервер в группе (только владелец, из ЛС)."""
+    user = callback_query.from_user
+    await callback_query.answer()
+    if user is None or not await _require_owner(callback_query, user.id):
+        return
+    chat_id = int(callback_data.chat_id)
+    chat = await database.get_chat(chat_id)
+    if chat is None or chat["owner_id"] != user.id:
+        await callback_query.answer("Чат не найден или не принадлежит вам.")
+        return
+    server = await database.get_server(int(callback_data.server_id))
+    if server is None or server["owner_id"] != user.id:
+        await callback_query.answer("Сервер не найден.")
+        return
+
+    if callback_data.action == "bind":
+        await database.link_server_to_chat(chat_id, int(server["id"]))
+        await database.log_action(
+            user.id, "chat_server_bind",
+            f"{server['display_name']} -> chat {chat_id}",
+            chat_id=chat_id, server_id=int(server["id"]),
+        )
+        await _safe_answer(callback_query, f"✅ {server['display_name']} подключён к группе.")
+    else:
+        await database.unlink_server_from_chat(chat_id, int(server["id"]))
+        await database.log_action(
+            user.id, "chat_server_unbind",
+            f"{server['display_name']} -> chat {chat_id}",
+            chat_id=chat_id, server_id=int(server["id"]),
+        )
+        await _safe_answer(callback_query, f"🚫 {server['display_name']} отключён от группы.")
+
+    # Дашборд группы: создать (после подключения) или обновить.
+    await dashboard.update_chats_dashboards(callback_query.bot, [chat_id])
+
+    linked = await database.get_chat_servers(chat_id)
+    await _safe_edit_text(
+        callback_query.message,
+        await _chat_card_text(chat, chat_id, linked),
+        get_chat_card_kb(chat_id, await _chat_card_servers(user.id), {int(s["id"]) for s in linked}),
+    )
 
 
 async def _show_users_page(callback_query: CallbackQuery, owner_id: int, chat_id: int, page: int) -> None:

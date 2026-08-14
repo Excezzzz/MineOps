@@ -1,6 +1,7 @@
 ﻿"""Групповой роутер (multi-tenant): дашборд, кнопки серверов, /link, доступ.
 
-- /link — владелец привязывает чат и ВСЕ свои серверы (дашборд закрепится);
+- /link — владелец привязывает чат; серверы для чата выбирает в ЛС
+  (/panel -> 💬 Чаты -> «🔗 Серверы чата»);
 - /unlink — владелец отвязывает чат (дашборд удаляется);
 - /status — ручное обновление дашборда (владелец и участники с доступом);
 - кнопки дашборда: старт/стоп/подтверждение очереди (ServerCb);
@@ -8,8 +9,8 @@
 - /help — динамическая справка по роли.
 
 Управление серверами доступно владельцу чата и участникам с has_access
-(кроме lockdown — тогда только владелец). Ошибки Aternos показываются
-алертом, бот продолжает работать.
+(кроме lockdown — тогда только владелец); кнопка ⏹ Стоп — ТОЛЬКО владельцу.
+Ошибки Aternos показываются алертом, бот продолжает работать.
 """
 
 from __future__ import annotations
@@ -29,9 +30,8 @@ from keyboards.group_kb import (
     ReqAccessCb,
     ServerCb,
     get_approve_access_kb,
-    get_dashboard_kb,
 )
-from services import dashboard, mcsrvstat
+from services import dashboard
 from services.aternos_api import AternosError, AternosManager
 from services.queue_watcher import start_queue_watcher
 
@@ -93,20 +93,15 @@ async def _require_chat_permission(callback_query: CallbackQuery) -> tuple | Non
 async def link_command(message: Message) -> None:
     """Привязка чата: только для зарегистрированного владельца.
 
-    Проверки: владелец зарегистрирован (get_owner) -> есть серверы ->
-    чат не занят другим владельцем -> регистрируем чат, привязываем ВСЕ
-    серверы и сразу создаём/закрепляем дашборд.
+    Чат регистрируется БЕЗ серверов — владелец сам выбирает, какие серверы
+    будут доступны в этой группе: ЛС с ботом -> /panel -> 💬 Чаты ->
+    «🔗 Серверы чата». Дашборд создаётся, когда подключён первый сервер.
     """
     user = message.from_user
     if user is None:
         return
     if await database.get_owner(user.id) is None:
         await message.answer("❌ Ты не зарегистрирован. Напиши мне в ЛС /start чтобы пройти онбординг")
-        return
-
-    servers = await database.get_servers_by_owner(user.id)
-    if not servers:
-        await message.answer("❌ У тебя нет серверов. Добавь их в ЛС с ботом")
         return
 
     chat_id = int(message.chat.id)
@@ -116,32 +111,15 @@ async def link_command(message: Message) -> None:
         return
 
     await database.add_chat(chat_id, user.id, message.chat.title or "")
-
-    for server in servers:
-        await database.link_server_to_chat(chat_id, server["id"])
     await database.log_action(user.id, "chat_link", f"chat {chat_id}", chat_id=chat_id)
-    logger.info(
-        "чат %s: владелец %s привязал серверы %s",
-        chat_id, user.id, [s["id"] for s in servers],
+    logger.info("чат %s: владелец %s привязал чат (серверы — позже)", chat_id, user.id)
+
+    await message.answer(
+        "✅ Чат привязан!\n\n"
+        "Теперь выберите, какие серверы будут доступны в этой группе:\n"
+        "📱 ЛС с ботом → /panel → 💬 Чаты → «🔗 Серверы чата».\n\n"
+        "Дашборд появится, как только вы подключите первый сервер."
     )
-
-    # Сразу создаём дашборд: статусы -> текст -> отправка -> закреп -> сохранение.
-    bound = await database.get_chat_servers(chat_id)
-    statuses = await mcsrvstat.get_servers_status(bound)
-    merged = [{**s, **statuses.get(s["server_ip"], {})} for s in bound]
-    dashboard_text = dashboard.format_dashboard_text(merged)
-    kb = get_dashboard_kb(merged, chat_id)
-    msg = await message.answer(dashboard_text, reply_markup=kb)
-    try:
-        await message.bot.pin_chat_message(
-            chat_id=chat_id, message_id=msg.message_id, disable_notification=True
-        )
-    except TelegramBadRequest as exc:
-        logger.warning("link: закрепить дашборд не удалось: %s", exc)
-    await database.set_chat_pinned_msg(chat_id, msg.message_id)
-    logger.info("чат %s: дашборд создан и закреплён (msg %s)", chat_id, msg.message_id)
-
-    await message.answer("✅ Чат привязан, серверы подключены, дашборд закреплён")
 
 
 @router.message(F.chat.type.in_({"group", "supergroup"}), Command("unlink"), IsOwnerFilter())
@@ -188,12 +166,12 @@ async def help_command(message: Message) -> None:
     if owner and owner["user_id"] == user.id:
         await message.answer(
             "<b>Команды владельца чата:</b>\n"
-            "/link — привязать чат и выбрать серверы\n"
+            "/link — привязать чат (серверы выбираются в ЛС)\n"
             "/unlink — отвязать чат\n"
             "/status — обновить дашборд вручную\n"
             "/emergency — локдаун (в ЛС с ботом)\n\n"
             "<b>Кнопки дашборда:</b>\n"
-            "▶️ Старт · ⏹ Стоп · ✅ Подтвердить очередь"
+            "▶️ Старт · ⏹ Стоп (только владелец) · ✅ Подтвердить очередь"
         )
     else:
         await message.answer(
@@ -218,9 +196,18 @@ async def on_server_action(callback_query: CallbackQuery, callback_data: ServerC
     if perm is None:
         return
     owner, _ = perm
+    user = callback_query.from_user
     chat_id = int(callback_query.message.chat.id)
     server_id = int(callback_data.server_id)
     action = callback_data.action
+
+    if action == "stop" and (user is None or user.id != owner["user_id"]):
+        await _safe_answer(
+            callback_query,
+            "⏹ Останавливать сервер может только владелец.",
+            show_alert=True,
+        )
+        return
 
     manager = AternosManager(owner["user_id"])
     try:

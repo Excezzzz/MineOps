@@ -175,6 +175,45 @@ async def _render_dashboard(bot: Bot, chat_id: int, text: str, kb) -> None:
         logger.warning("chat %s: cannot create dashboard (%s)", chat_id, exc)
 
 
+async def get_status_with_panel(
+    owner_id: int, server: dict, status: dict
+) -> dict:
+    """Кросс-проверка статуса mcsrvstat с панелью Aternos.
+
+    Публичный пинг на Aternos ВРЁТ: прокси отвечает даже на оффлайн-
+    серверах, поэтому панель — авторитетный источник online/offline,
+    количества игроков (players/slots) и их ников (playerlist). Если панель
+    недоступна (Cloudflare и т.п.) — отдаём публичный статус как есть.
+    """
+    from services.aternos_api import AternosError, AternosManager
+
+    try:
+        panel = await AternosManager(owner_id).get_panel_status(int(server["id"]))
+    except AternosError as exc:
+        logger.warning(
+            "server %s (id=%s): статус панели не получен: %s",
+            server["server_ip"], server["id"], exc,
+        )
+        return status
+
+    merged = dict(status)
+    if int(panel.get("panel_status") or 0) == 1:  # панель: онлайн
+        merged["is_online"] = True
+        merged["players_online"] = int(panel.get("players") or 0)
+        merged["players_max"] = int(panel.get("slots") or 0) or merged.get("players_max", 0)
+        if panel.get("playerlist"):
+            merged["player_list"] = panel["playerlist"]
+        if panel.get("port"):
+            merged["port"] = int(panel["port"])
+    else:  # панель: оффлайн — публичный пинг не смог это опровергнуть
+        merged["is_online"] = False
+        merged["players_online"] = 0
+        merged["players_max"] = 0
+        merged["player_list"] = []
+        merged.pop("port", None)
+    return merged
+
+
 async def _update_chat_dashboard(bot: Bot, chat_id: int) -> None:
     """Обновляет дашборд одного чата (по привязанным серверам)."""
     servers = await database.get_chat_servers(chat_id)
@@ -185,6 +224,11 @@ async def _update_chat_dashboard(bot: Bot, chat_id: int) -> None:
         port = await _ensure_server_port(int(s["owner_id"]), s["id"])
         s["port"] = port
     statuses = await mcsrvstat.get_servers_status(servers)
+    for s in servers:
+        status = statuses.get(s["server_ip"], {})
+        statuses[s["server_ip"]] = await get_status_with_panel(
+            int(s["owner_id"]), s, status
+        )
     for s in servers:
         status = statuses.get(s["server_ip"], {})
         known_port = await database.get_server_port(s["id"])
@@ -271,6 +315,7 @@ async def update_dashboards(bot: Bot) -> None:
             )
             port = await _ensure_server_port(int(owner["user_id"]), server["id"])
             status = await mcsrvstat.get_server_status(server["server_ip"], port=port)
+            status = await get_status_with_panel(int(owner["user_id"]), server, status)
             statuses_by_server[int(server["id"])] = status
             logger.info(
                 "server %s: online=%s (players %s/%s, port=%s)",

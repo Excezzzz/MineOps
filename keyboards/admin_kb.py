@@ -23,6 +23,12 @@ class PanelChatCb(CallbackData, prefix="pchat"):
     chat_id: int
     action: str  # "select" | "unlink" | "users"
 
+# Переключатель сервера для чата (привязать/отвязать).
+class PanelChatServerCb(CallbackData, prefix="pcsrv"):
+    chat_id: int
+    server_id: int
+    action: str  # "bind" | "unbind"
+
 # Пагинация участников чата.
 class UsersPageCb(CallbackData, prefix="upage"):
     chat_id: int
@@ -126,32 +132,50 @@ def get_owner_chats_kb(chats: list[dict]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def get_chat_card_kb(chat_id: int) -> InlineKeyboardMarkup:
-    """Карточка чата: участники, отвязка, возврат."""
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="👥 Участники",
-                    callback_data=PanelChatCb(chat_id=chat_id, action="users").pack(),
+def get_chat_card_kb(
+    chat_id: int, servers: list[dict], linked_ids: set[int]
+) -> InlineKeyboardMarkup:
+    """Карточка чата: переключатели серверов (привязан/нет), участники, отвязка."""
+    buttons: list[list[InlineKeyboardButton]] = [
+        [
+            InlineKeyboardButton(
+                text=(
+                    f"✅ {s['display_name']}"
+                    if int(s["id"]) in linked_ids
+                    else f"☑️ {s['display_name']}"
                 ),
-                InlineKeyboardButton(
-                    text="🔗 Серверы чата",
-                    callback_data=PanelChatCb(chat_id=chat_id, action="select").pack(),
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    text="🗑 Отвязать чат",
-                    callback_data=PanelChatCb(chat_id=chat_id, action="unlink").pack(),
-                ),
-                InlineKeyboardButton(
-                    text="🔙 К чатам",
-                    callback_data=PanelCb(action="chats").pack(),
-                ),
-            ],
+                callback_data=PanelChatServerCb(
+                    chat_id=chat_id,
+                    server_id=int(s["id"]),
+                    action="unbind" if int(s["id"]) in linked_ids else "bind",
+                ).pack(),
+            )
+        ]
+        for s in servers
+    ]
+    if not servers:
+        buttons.append([InlineKeyboardButton(text="(серверов нет)", callback_data="noop")])
+    buttons.append(
+        [
+            InlineKeyboardButton(
+                text="👥 Участники",
+                callback_data=PanelChatCb(chat_id=chat_id, action="users").pack(),
+            )
         ]
     )
+    buttons.append(
+        [
+            InlineKeyboardButton(
+                text="🗑 Отвязать чат",
+                callback_data=PanelChatCb(chat_id=chat_id, action="unlink").pack(),
+            ),
+            InlineKeyboardButton(
+                text="🔙 К чатам",
+                callback_data=PanelCb(action="chats").pack(),
+            ),
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def get_users_page_kb(chat_id: int, page: int, total: int, limit: int) -> InlineKeyboardMarkup:

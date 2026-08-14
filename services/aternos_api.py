@@ -153,6 +153,25 @@ class AternosManager:
         server.fetch()
         return dict(server._info or {})
 
+    def _panel_status_sync(self, cookie: str, aternos_id: str) -> dict:
+        """Статус сервера с панели Aternos: online/offline, игроки, порт.
+
+        Панель — авторитетный источник: её status (0=оффлайн, 1=онлайн),
+        players/slots и playerlist (реальные ники). Публичный legacy-пинг
+        на Aternos ВРЁТ: прокси отвечает даже на оффлайн-серверах.
+        """
+        client = self._get_client_sync(cookie)
+        server = self._get_server_sync(client, aternos_id)
+        server.fetch()
+        info = dict(server._info or {})
+        return {
+            "panel_status": int(info.get("status") or 0),
+            "players": int(info.get("players") or 0),
+            "slots": int(info.get("slots") or 0),
+            "port": int(info.get("port") or 0),
+            "playerlist": [str(n) for n in (info.get("playerlist") or [])],
+        }
+
     def _confirm_sync(self, cookie: str, aternos_id: str) -> None:
         client = self._get_client_sync(cookie)
         server = self._get_server_sync(client, aternos_id)
@@ -235,6 +254,17 @@ class AternosManager:
         if server is None or server["owner_id"] != self.owner_id:
             raise AternosError("Сервер не найден или не принадлежит владельцу.")
         return await self._run(self._queue_status_sync, server["aternos_id"])
+
+    async def get_panel_status(self, server_id: int) -> dict:
+        """Статус сервера с панели Aternos (авторитетный источник).
+
+        Возвращает {panel_status, players, slots, port, playerlist};
+        panel_status: 0 = оффлайн, 1 = онлайн.
+        """
+        server = await database.get_server(server_id)
+        if server is None or server["owner_id"] != self.owner_id:
+            raise AternosError("Сервер не найден или не принадлежит владельцу.")
+        return await self._run(self._panel_status_sync, server["aternos_id"])
 
     async def confirm_server(self, server_id: int) -> None:
         """Подтверждает запуск сервера, дошедшего до очереди (auto_confirm)."""
