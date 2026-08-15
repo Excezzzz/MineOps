@@ -11,7 +11,8 @@ FROM alpine:3.21
 RUN apk add --no-cache ca-certificates tzdata
 
 WORKDIR /app
-COPY bin/mineops /app/mineops
+# --chmod: бит +x не сохраняется при tar из Windows (bsdtar)
+COPY --chmod=755 bin/mineops /app/mineops
 
 ENV TZ=UTC
 
