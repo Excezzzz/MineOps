@@ -25,4 +25,4 @@ bin/
 .DS_Store
 Thumbs.db
 .idea/
-.vscode/
+.vscode/deploy.tar.gz
