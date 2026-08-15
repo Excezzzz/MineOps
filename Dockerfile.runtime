@@ -1,0 +1,18 @@
+# MineOps — runtime-образ для маломощного VPS (1 ядро, <2 ГБ RAM):
+# бинарник собирается локально (bin/mineops), на сервере НЕ компилируем
+# (сборка modernc.org/sqlite в контейнере вызывает OOM на этом железе).
+#
+# Канонический multi-stage Dockerfile (полная сборка из исходников) —
+# в файле Dockerfile для машин с достаточным объёмом RAM/CI.
+
+FROM alpine:3.21
+
+# ca-certificates: TLS до api.telegram.org / aternos.org / mcsrvstat.us.
+RUN apk add --no-cache ca-certificates tzdata
+
+WORKDIR /app
+COPY bin/mineops /app/mineops
+
+ENV TZ=UTC
+
+CMD ["/app/mineops"]

@@ -18,6 +18,9 @@ venv/
 # --- logs ---
 *.log
 
+# --- cross-compiled binary (deploy artifact) ---
+bin/
+
 # --- os / editors ---
 .DS_Store
 Thumbs.db

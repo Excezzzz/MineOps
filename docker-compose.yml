@@ -1,8 +1,8 @@
-version: "3.8"
-
 services:
   mineops:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.runtime
     container_name: mineops_bot
     restart: unless-stopped
     env_file:
