@@ -307,7 +307,7 @@ func (s *Session) request(ctx context.Context, method, path string,
 		params.Set("SEC", s.secKey+":"+s.secVal)
 	}
 	u := baseURL + path
-	if len(params) > 0 {
+	if len(params) > 0 && method != http.MethodPost {
 		u += "?" + params.Encode()
 	}
 
@@ -449,14 +449,9 @@ func (s *Session) ListServers(ctx context.Context) ([]ServerBrief, error) {
 			brief.ServerIP = info.IP
 			brief.DisplayName = firstNonEmpty(info.Name, info.IP, id)
 			if brief.ServerIP == "" {
-				sub := info.IP
-				if i := strings.Index(sub, "."); i >= 0 {
-					sub = sub[:i]
-				}
-				if sub != "" && !strings.HasSuffix(sub, ".aternos.me") {
-					sub += ".aternos.me"
-				}
-				brief.ServerIP = sub
+				// IP не отдан панелью — собираем адрес из id сервера
+				// (как _get_server_address в python-aternos).
+				brief.ServerIP = id + ".aternos.me"
 			}
 		}
 		out = append(out, brief)
@@ -491,8 +486,9 @@ func firstNonEmpty(vals ...string) string {
 }
 
 // actionServer выполняет ajax-действие над сервером (start/stop/confirm/...).
+// Метод POST с данными в теле — как в python-aternos (_urlopen с data).
 func (s *Session) actionServer(ctx context.Context, action string, servID string, extra url.Values) (map[string]any, error) {
-	resp, err := s.request(ctx, http.MethodGet, "/ajax/server/"+action, extra,
+	resp, err := s.request(ctx, http.MethodPost, "/ajax/server/"+action, extra,
 		map[string]string{"ATERNOS_SERVER": servID}, true)
 	if err != nil {
 		return nil, err

@@ -9,6 +9,7 @@ package queuewatcher
 import (
 	"context"
 	"fmt"
+	"html"
 	"log"
 	"strings"
 	"sync"
@@ -250,7 +251,7 @@ func (w *Watcher) notifyOwner(b *tele.Bot, ownerID, serverID int64, reason strin
 	}
 	_, err = b.Send(&tele.Chat{ID: ownerID},
 		fmt.Sprintf("⚠️ <b>Автоподтверждение запуска не сработало:</b>\n🖥 %s\n%s\nПроверьте Aternos вручную.",
-			name, reason))
+			html.EscapeString(name), reason))
 	if err != nil {
 		log.Printf("queuewatcher: не удалось уведомить владельца %d о сервере %d: %v", ownerID, serverID, err)
 	}

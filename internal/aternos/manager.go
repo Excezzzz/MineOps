@@ -5,6 +5,7 @@ package aternos
 import (
 	"context"
 	"fmt"
+	"html"
 	"net/http"
 	"sync"
 	"time"
@@ -185,7 +186,7 @@ func (m *Manager) StartServer(ctx context.Context, serverID int64) (string, erro
 		return "", err
 	}
 	_ = m.db.LogAction(m.ownerID, "server_start", server.DisplayName, 0, 0, serverID)
-	return fmt.Sprintf("Запуск сервера %s запрошен.", server.DisplayName), nil
+	return fmt.Sprintf("Запуск сервера %s запрошен.", html.EscapeString(server.DisplayName)), nil
 }
 
 // StopServer останавливает сервер владельца.
@@ -208,7 +209,7 @@ func (m *Manager) StopServer(ctx context.Context, serverID int64) (string, error
 		return "", err
 	}
 	_ = m.db.LogAction(m.ownerID, "server_stop", server.DisplayName, 0, 0, serverID)
-	return fmt.Sprintf("Остановка сервера %s запрошена.", server.DisplayName), nil
+	return fmt.Sprintf("Остановка сервера %s запрошена.", html.EscapeString(server.DisplayName)), nil
 }
 
 // ConfirmServer подтверждает запуск сервера из очереди.

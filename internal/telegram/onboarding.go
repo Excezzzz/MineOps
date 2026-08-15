@@ -89,9 +89,15 @@ func (bot *Bot) cbOnboarding(c tele.Context, parts []string) error {
 		if !ok {
 			return c.Respond(&tele.CallbackResponse{})
 		}
-		servers := data.([]aternos.ServerBrief)
+		servers, ok := data.([]aternos.ServerBrief)
+		if !ok {
+			return c.Respond(&tele.CallbackResponse{})
+		}
 		selAny, _ := bot.fsm.GetData(cb.Sender.ID, "selected")
-		selected := selAny.(map[string]bool)
+		selected, ok := selAny.(map[string]bool)
+		if !ok {
+			return c.Respond(&tele.CallbackResponse{})
+		}
 
 		if selected[sid] {
 			delete(selected, sid)
@@ -109,7 +115,11 @@ func (bot *Bot) cbOnboarding(c tele.Context, parts []string) error {
 
 	if action == "done" {
 		selAny, _ := bot.fsm.GetData(cb.Sender.ID, "selected")
-		selected := selAny.(map[string]bool)
+		selected, ok := selAny.(map[string]bool)
+		if !ok {
+			bot.answer(c, "Сессия устарела — начните заново /start.", false)
+			return nil
+		}
 		if len(selected) == 0 {
 			bot.answer(c, "Выберите хотя бы один сервер.", false)
 			return nil

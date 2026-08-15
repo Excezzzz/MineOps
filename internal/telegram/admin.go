@@ -79,12 +79,15 @@ func (bot *Bot) cmdHelp(c tele.Context) error {
 			_, err := bot.b.Send(m.Chat,
 				"<b>Команды владельца:</b>\n"+
 					"/panel — панель (серверы, чаты, настройки, аудит)\n"+
+					"/run — запустить все серверы\n"+
+					"/status — статус всех серверов\n"+
 					"/set_session — обновить куку Aternos\n"+
 					"/emergency — локдаун (вкл/выкл)\n\n"+
 					"<b>В группе:</b>\n"+
 					"/link — привязать чат (серверы выбираются в ЛС)\n"+
 					"/unlink — отвязать чат\n"+
-					"/status — обновить дашборд вручную")
+					"/run — запустить серверы чата\n"+
+					"/status — статус серверов чата")
 			return err
 		}
 		return bot.cmdGroupHelp(c)
@@ -307,8 +310,10 @@ func (bot *Bot) cbPanelServer(c tele.Context, parts []string) error {
 	defer cancel()
 	status := bot.dash.GetAuthoritativeStatus(ctx, uid, server)
 	stateText := "🔴 ОФФЛАЙН"
+	playersText := ""
 	if status.IsOnline {
 		stateText = "🟢 ОНЛАЙН"
+		playersText = fmt.Sprintf(" · %d/%d игроков", status.PlayersOnline, status.PlayersMax)
 	}
 	autoConfirm := "выкл"
 	if server.AutoConfirm {
@@ -321,7 +326,7 @@ func (bot *Bot) cbPanelServer(c tele.Context, parts []string) error {
 	_ = bot.edit(cb.Message,
 		"🖥 <b>"+html.EscapeString(server.DisplayName)+"</b>\n"+
 			"🌐 IP: "+html.EscapeString(ip)+"\n"+
-			fmt.Sprintf("%s · %d/%d игроков\n", stateText, status.PlayersOnline, status.PlayersMax)+
+			fmt.Sprintf("%s%s\n", stateText, playersText)+
 			"✅ Автоподтверждение: "+autoConfirm+"\n\n"+
 			"<i>Настройка автоподтверждения — в разделе «Настройки».</i>",
 		serverCardKB(server.ID, status.IsOnline))

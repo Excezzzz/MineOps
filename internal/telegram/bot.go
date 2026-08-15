@@ -54,9 +54,10 @@ func NewBot(cfg *config.Config, db *database.DB, managers *aternos.Registry,
 	}
 
 	pref := tele.Settings{
-		Token:   cfg.BotToken,
-		Poller:  &tele.LongPoller{Timeout: 10 * time.Second},
-		OnError: bot.onError,
+		Token:     cfg.BotToken,
+		Poller:    &tele.LongPoller{Timeout: 10 * time.Second},
+		ParseMode: tele.ModeHTML,
+		OnError:   bot.onError,
 	}
 	b, err := tele.NewBot(pref)
 	if err != nil {
@@ -70,6 +71,7 @@ func NewBot(cfg *config.Config, db *database.DB, managers *aternos.Registry,
 			defer func() {
 				if r := recover(); r != nil {
 					log.Printf("PANIC in handler: %v\n%s", r, debug.Stack())
+					bot.notifyOwnerCritical(fmt.Sprintf("%v", r), debug.Stack())
 				}
 			}()
 			if c.Message() != nil {
@@ -110,10 +112,11 @@ func (bot *Bot) registerHandlers() {
 	b.Handle("/emergency", bot.cmdEmergency)
 	b.Handle("/announce", bot.cmdAnnounce)
 
-	// Группы: /link, /unlink, /status
+	// Группы: /link, /unlink, /status, /run
 	b.Handle("/link", bot.cmdLink)
 	b.Handle("/unlink", bot.cmdUnlink)
 	b.Handle("/status", bot.cmdStatus)
+	b.Handle("/run", bot.cmdRun)
 
 	// Текст (FSM: онбординг, обновление куки)
 	b.Handle(tele.OnText, bot.onText)
@@ -130,7 +133,8 @@ func (bot *Bot) setCommands() {
 		tele.Command{Text: "start", Description: "Панель владельца / онбординг"},
 		tele.Command{Text: "panel", Description: "Панель владельца"},
 		tele.Command{Text: "help", Description: "Справка"},
-		tele.Command{Text: "status", Description: "Обновить дашборд (в группе)"},
+		tele.Command{Text: "status", Description: "Статус серверов (группа / ЛС)"},
+		tele.Command{Text: "run", Description: "Запустить серверы (группа / ЛС)"},
 		tele.Command{Text: "link", Description: "Привязать чат (в группе, владелец)"},
 		tele.Command{Text: "unlink", Description: "Отвязать чат (в группе, владелец)"},
 		tele.Command{Text: "set_session", Description: "Обновить куку Aternos"},
@@ -197,6 +201,41 @@ func (bot *Bot) onError(err error, c tele.Context) {
 	if c != nil {
 		log.Printf("  context: update=%d chat=%d", c.Update().ID, c.Chat().ID)
 	}
+	// Мусорные ошибки Telegram API (спам кнопками, rate limit, повторные
+	// правки) владельцу не отправляются — это не ошибки системы.
+	if isNoiseError(err) {
+		return
+	}
+	bot.notifyOwnerError(err.Error())
+}
+
+// isNoiseError — ошибки, которые возникают при спаме кнопками / кликах
+// по дашборду в группе и НЕ являются реальными сбоями бота.
+func isNoiseError(err error) bool {
+	if err == nil {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "429"), strings.Contains(msg, "too many requests"):
+		return true
+	case strings.Contains(msg, "query is too old"):
+		return true
+	case strings.Contains(msg, "message is not modified"):
+		return true
+	case strings.Contains(msg, "callback_query"):
+		return true
+	}
+	return false
+}
+
+func isPanicError(err error) bool {
+	return err != nil && strings.HasPrefix(err.Error(), "panic:")
+}
+
+// notifyOwnerError — отправка ошибки Владельцу в ЛС.
+// Анти-спам: не чаще одного сообщения в минуту.
+func (bot *Bot) notifyOwnerError(text string) {
 	if bot.cfg.SuperAdminID <= 0 {
 		return
 	}
@@ -209,19 +248,42 @@ func (bot *Bot) onError(err error, c tele.Context) {
 	bot.lastErrNotified = now
 	bot.mu.Unlock()
 
-	_, err = bot.b.Send(&tele.Chat{ID: bot.cfg.SuperAdminID},
-		fmt.Sprintf("⚠️ <b>Ошибка бота:</b>\n<code>%s</code>",
-			escapeHTML(fmt.Sprintf("%v", err))[:min(1500, len(fmt.Sprintf("%v", err)))]))
+	msg := "⚠️ <b>Ошибка бота:</b>\n<code>" + escapeHTML(text) + "</code>"
+	if len(msg) > 3500 {
+		msg = msg[:3500]
+	}
+	_, err := bot.b.Send(&tele.Chat{ID: bot.cfg.SuperAdminID}, msg)
 	if err != nil {
 		log.Printf("не удалось уведомить суперадмина: %v", err)
 	}
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
+// notifyOwnerCritical — уведомление Владельца о критических падениях
+// (panic/exception). Анти-спам: не чаще одного сообщения в минуту.
+func (bot *Bot) notifyOwnerCritical(reason string, stack []byte) {
+	if bot.cfg.SuperAdminID <= 0 {
+		return
 	}
-	return b
+	bot.mu.Lock()
+	now := time.Now()
+	if now.Sub(bot.lastErrNotified) < errNotifyMinGap {
+		bot.mu.Unlock()
+		return
+	}
+	bot.lastErrNotified = now
+	bot.mu.Unlock()
+
+	text := "🚨 <b>Паника в боте:</b>\n<code>" + escapeHTML(reason) + "</code>"
+	if len(stack) > 0 {
+		text += "\n<pre>" + escapeHTML(string(stack)) + "</pre>"
+	}
+	if len(text) > 3500 {
+		text = text[:3500]
+	}
+	_, err := bot.b.Send(&tele.Chat{ID: bot.cfg.SuperAdminID}, text)
+	if err != nil {
+		log.Printf("не удалось уведомить суперадмина: %v", err)
+	}
 }
 
 func escapeHTML(s string) string {
@@ -299,7 +361,9 @@ func (bot *Bot) answer(c tele.Context, text string, showAlert bool) {
 
 // edit — безопасный edit_text (не падает на «message is not modified»).
 func (bot *Bot) edit(msg tele.Editable, text string, kb *tele.ReplyMarkup) error {
-	_, err := bot.b.Edit(msg, text, &tele.SendOptions{ReplyMarkup: kb})
+	// ParseMode задаём явно: переданный SendOptions иначе перетирает
+	// глобальный ParseMode (HTML) пустым значением — теги показываются как текст.
+	_, err := bot.b.Edit(msg, text, &tele.SendOptions{ParseMode: tele.ModeHTML, ReplyMarkup: kb})
 	if err == tele.ErrSameMessageContent {
 		return nil
 	}

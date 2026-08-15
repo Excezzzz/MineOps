@@ -198,8 +198,10 @@ func (d *Dashboard) ensureServerPort(ctx context.Context, ownerID, serverID int6
 	if err == nil && port > 0 && port != 25565 {
 		return port
 	}
-	info, err := d.managers.For(ownerID).FetchInfo(ctx, serverID)
-	if err == nil && info != nil {
+	// Берём из кеша панели (TTL 60с), а не прямым запросом — иначе каждый
+	// тик дашборда долбит /server на Aternos.
+	info := d.getPanelCached(ctx, ownerID, serverID)
+	if info != nil {
 		p := toIntAny(info.Port)
 		if p > 0 && p != 25565 {
 			_ = d.db.SetServerPort(serverID, p)
@@ -334,7 +336,7 @@ func (d *Dashboard) renderDashboard(ctx context.Context, b *tele.Bot, chatID int
 
 	if pinnedMsgID > 0 {
 		msg := &tele.StoredMessage{MessageID: strconv.Itoa(int(pinnedMsgID)), ChatID: chatID}
-		_, err := b.Edit(msg, text, &tele.SendOptions{ReplyMarkup: kb})
+		_, err := b.Edit(msg, text, &tele.SendOptions{ParseMode: tele.ModeHTML, ReplyMarkup: kb})
 		if err == nil {
 			d.pinState(chatID, !d.pinIfNeeded(b, chatID, int(pinnedMsgID)))
 			return
@@ -348,7 +350,7 @@ func (d *Dashboard) renderDashboard(ctx context.Context, b *tele.Bot, chatID int
 		// Падаем вниз и пересоздаём сообщение.
 	}
 
-	msg, err := b.Send(&tele.Chat{ID: chatID}, text, &tele.SendOptions{ReplyMarkup: kb})
+	msg, err := b.Send(&tele.Chat{ID: chatID}, text, &tele.SendOptions{ParseMode: tele.ModeHTML, ReplyMarkup: kb})
 	if err != nil {
 		log.Printf("dashboard: chat %d: cannot send (%v)", chatID, err)
 		return
