@@ -341,6 +341,8 @@ func (bot *Bot) onCallback(c tele.Context) error {
 			return bot.cbRequestAccess(c, parts)
 		case cbApproveAcc:
 			return bot.cbApproveAccess(c, parts)
+		case cbRunSrv:
+			return bot.cbRunServer(c, parts)
 		case cbOnboarding:
 			return bot.cbOnboarding(c, parts)
 		case cbNoop:

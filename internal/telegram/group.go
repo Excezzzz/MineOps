@@ -184,6 +184,12 @@ func (bot *Bot) cmdRun(c tele.Context) error {
 			return err
 		}
 
+		// В группе с несколькими серверами — даём выбор, какой запустить.
+		if bot.isGroup(c) && len(servers) > 1 {
+			_, err := bot.b.Send(m.Chat, "▶️ <b>Какой сервер запустить?</b>", runServerPickerKB(servers, chatID))
+			return err
+		}
+
 		manager := bot.managers.For(ownerID)
 		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 		defer cancel()
@@ -223,6 +229,48 @@ func (bot *Bot) cmdRun(c tele.Context) error {
 		_, err := bot.b.Send(m.Chat, strings.Join(lines, "\n"))
 		return err
 	})
+}
+
+// cbRunServer — выбор сервера для /run: запускает конкретный сервер в чате.
+func (bot *Bot) cbRunServer(c tele.Context, parts []string) error {
+	cb := c.Callback()
+	if cb == nil || cb.Message == nil || cb.Sender == nil {
+		return c.Respond(&tele.CallbackResponse{})
+	}
+	bot.answer(c, "", false)
+	serverID := cbInt(parts, 1)
+	chatID := cbInt(parts, 2)
+	uid := cb.Sender.ID
+
+	if !bot.canManage(uid, chatID) {
+		bot.answer(c, "У вас нет доступа к серверам этого чата.", false)
+		return nil
+	}
+	owner, err := bot.db.GetChatOwner(chatID)
+	if err != nil || owner == nil {
+		bot.answer(c, "Чат не привязан к владельцу.", false)
+		return nil
+	}
+	server, _ := bot.db.GetServer(serverID)
+	if server == nil || server.OwnerID != owner.UserID {
+		bot.answer(c, "Сервер не найден.", false)
+		return nil
+	}
+
+	manager := bot.managers.For(owner.UserID)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	text, err := manager.StartServer(ctx, serverID)
+	if err != nil {
+		bot.answer(c, friendlyStartError(err), true)
+		return nil
+	}
+	bot.dash.MarkAsStarting(300)
+	bot.watcher.Start(bot.b, owner.UserID, serverID)
+	bot.dash.UpdateChatsDashboards(context.Background(), bot.b, []int64{chatID})
+	bot.answer(c, text, false)
+	return nil
 }
 
 func (bot *Bot) cmdGroupHelp(c tele.Context) error {

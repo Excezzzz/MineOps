@@ -27,6 +27,7 @@ const (
 	cbServer      = "srv"           // srv:<server_id>:<action>
 	cbReqAccess   = "req_acc"       // req_acc:<chat_id>
 	cbApproveAcc  = "app_acc"       // app_acc:<user_id>:<chat_id>:<approve True/False>
+	cbRunSrv      = "run_srv"       // run_srv:<server_id>:<chat_id> — выбор сервера для /run
 	cbOnboarding  = "onb"           // onb:<action>:<aternos_id>
 	cbRefreshDash = "refresh_dashboard"
 	cbNoop        = "noop"
@@ -34,6 +35,17 @@ const (
 
 func cbData(parts ...string) string {
 	return strings.Join(parts, ":")
+}
+
+// btnName укорачивает длинное имя сервера, чтобы кнопка не выходила за
+// границы сообщения (Telegram не переносит текст кнопки красиво).
+func btnName(name string) string {
+	const maxLen = 24
+	r := []rune(name)
+	if len(r) <= maxLen {
+		return name
+	}
+	return string(r[:maxLen-1]) + "…"
 }
 
 // ------------------------------------------------------------------ //
@@ -57,7 +69,7 @@ func ownerServersKB(servers []*database.Server) *tele.ReplyMarkup {
 	rows := make([][]tele.InlineButton, 0, len(servers)+1)
 	for _, s := range servers {
 		rows = append(rows, []tele.InlineButton{{
-			Text: "🖥 " + s.DisplayName,
+			Text: "🖥 " + btnName(s.DisplayName),
 			Data: cbData(cbPanelServer, strconv.FormatInt(s.ID, 10)),
 		}})
 	}
@@ -117,10 +129,10 @@ func chatCardKB(chatID int64, servers []*database.Server, linkedIDs map[int64]bo
 	rows := make([][]tele.InlineButton, 0, len(servers)+3)
 	for _, s := range servers {
 		linked := linkedIDs[s.ID]
-		text := "☑️ " + s.DisplayName
+		text := "☑️ " + btnName(s.DisplayName)
 		action := "bind"
 		if linked {
-			text = "✅ " + s.DisplayName
+			text = "✅ " + btnName(s.DisplayName)
 			action = "unbind"
 		}
 		rows = append(rows, []tele.InlineButton{{
@@ -211,31 +223,24 @@ func DashboardKB(servers []dashboard.DashServer, chatID int64) *tele.ReplyMarkup
 	return dashboardKB(servers, chatID)
 }
 
-// dashboardKB — кнопки дашборда: по строке на сервер + обновление/доступ.
+// dashboardKB — кнопки дашборда: по строке действий на сервер + обновление/доступ.
 func dashboardKB(servers []dashboard.DashServer, chatID int64) *tele.ReplyMarkup {
 	rows := make([][]tele.InlineButton, 0, len(servers)+1)
 	for _, s := range servers {
-		name := s.DisplayName
-		if name == "" {
-			name = fmt.Sprintf("ID %d", s.ID)
-		}
-		row := []tele.InlineButton{{
-			Text: "🖥 " + name,
-			Data: cbData(cbServer, strconv.FormatInt(s.ID, 10), "status"),
-		}}
+		var row []tele.InlineButton
 		if s.IsOnline {
-			row = append(row, tele.InlineButton{
+			row = []tele.InlineButton{{
 				Text: "⏹ Стоп", Data: cbData(cbServer, strconv.FormatInt(s.ID, 10), "stop"),
-			})
+			}}
 		} else {
-			row = append(row,
-				tele.InlineButton{
+			row = []tele.InlineButton{
+				{
 					Text: "▶️ Старт", Data: cbData(cbServer, strconv.FormatInt(s.ID, 10), "start"),
 				},
-				tele.InlineButton{
+				{
 					Text: "✅ Подтвердить", Data: cbData(cbServer, strconv.FormatInt(s.ID, 10), "confirm"),
 				},
-			)
+			}
 		}
 		rows = append(rows, row)
 	}
@@ -263,6 +268,22 @@ func approveAccessKB(userID, chatID int64) *tele.ReplyMarkup {
 	}}
 }
 
+// runServerPickerKB — выбор сервера для запуска через /run (несколько серверов).
+func runServerPickerKB(servers []*database.Server, chatID int64) *tele.ReplyMarkup {
+	rows := make([][]tele.InlineButton, 0, len(servers)+1)
+	for _, s := range servers {
+		name := s.DisplayName
+		if name == "" {
+			name = fmt.Sprintf("ID %d", s.ID)
+		}
+		rows = append(rows, []tele.InlineButton{{
+			Text: "▶️ " + btnName(name),
+			Data: cbData(cbRunSrv, strconv.FormatInt(s.ID, 10), strconv.FormatInt(chatID, 10)),
+		}})
+	}
+	return &tele.ReplyMarkup{InlineKeyboard: rows}
+}
+
 // ------------------------------------------------------------------ //
 // онбординг
 // ------------------------------------------------------------------ //
@@ -279,7 +300,7 @@ func serverPickerKB(servers []aternos.ServerBrief, selected map[string]bool, max
 			checked = "✅"
 		}
 		rows = append(rows, []tele.InlineButton{{
-			Text: checked + " " + name,
+			Text: checked + " " + btnName(name),
 			Data: cbData(cbOnboarding, "toggle", s.AternosID),
 		}})
 	}

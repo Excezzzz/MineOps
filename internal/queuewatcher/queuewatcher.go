@@ -107,7 +107,12 @@ func (w *Watcher) watchLoop(b *tele.Bot, ownerID, serverID int64) {
 
 		// Aternos просит подтверждение запуска — ТОЛЬКО при явном сигнале.
 		if strings.Contains(strings.ToLower(serverLang), "confirm") {
-			if err := manager.ConfirmServer(ctx, serverID); err != nil {
+			// Свежий контекст: предыдущий уже отменён (cancel() после FetchInfo),
+			// иначе ConfirmServer сразу упадёт с context canceled.
+			cctx, ccancel := context.WithTimeout(context.Background(), 45*time.Second)
+			err := manager.ConfirmServer(cctx, serverID)
+			ccancel()
+			if err != nil {
 				log.Printf("queuewatcher: сервер %d: confirm не удался (lang=%q): %v — ждём итерации",
 					serverID, serverLang, err)
 			} else {
