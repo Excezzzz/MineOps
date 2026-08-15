@@ -44,6 +44,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("telebot: %v", err)
 	}
+	// Перехватчик ошибок аутентификации Aternos: уведомляем Владельца в ЛС.
+	managers.SetAuthHook(func(ownerID int64) {
+		bot.NotifySessionExpired(ownerID)
+	})
 
 	// Планировщик: дашборды каждые 30 секунд, проверка сессий каждые 5 минут.
 	s := gocron.NewScheduler(time.UTC)

@@ -224,6 +224,7 @@ func DashboardKB(servers []dashboard.DashServer, chatID int64) *tele.ReplyMarkup
 }
 
 // dashboardKB — кнопки дашборда: по строке действий на сервер + обновление/доступ.
+// «✅ Подтвердить» появляется ТОЛЬКО в статусе is_starting (сервер в очереди).
 func dashboardKB(servers []dashboard.DashServer, chatID int64) *tele.ReplyMarkup {
 	rows := make([][]tele.InlineButton, 0, len(servers)+1)
 	for _, s := range servers {
@@ -232,15 +233,19 @@ func dashboardKB(servers []dashboard.DashServer, chatID int64) *tele.ReplyMarkup
 			row = []tele.InlineButton{{
 				Text: "⏹ Стоп", Data: cbData(cbServer, strconv.FormatInt(s.ID, 10), "stop"),
 			}}
-		} else {
+		} else if s.Starting {
 			row = []tele.InlineButton{
-				{
-					Text: "▶️ Старт", Data: cbData(cbServer, strconv.FormatInt(s.ID, 10), "start"),
-				},
 				{
 					Text: "✅ Подтвердить", Data: cbData(cbServer, strconv.FormatInt(s.ID, 10), "confirm"),
 				},
+				{
+					Text: "▶️ Старт", Data: cbData(cbServer, strconv.FormatInt(s.ID, 10), "start"),
+				},
 			}
+		} else {
+			row = []tele.InlineButton{{
+				Text: "▶️ Старт", Data: cbData(cbServer, strconv.FormatInt(s.ID, 10), "start"),
+			}}
 		}
 		rows = append(rows, row)
 	}

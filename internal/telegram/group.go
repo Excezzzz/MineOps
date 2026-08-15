@@ -161,16 +161,24 @@ func (bot *Bot) cmdRun(c tele.Context) error {
 				_, err := bot.b.Send(m.Chat, "Сначала пройдите онбординг: /start.")
 				return err
 			}
+			if bot.lockdownActive(uid) {
+				_, _ = bot.b.Send(m.Chat, msgLockdownBlocked)
+				return nil
+			}
 			ownerID = uid
 			servers, _ = bot.db.GetActiveServersByOwner(uid)
 		} else if bot.isGroup(c) {
-			if !bot.canManage(uid, chatID) {
-				_, err := bot.b.Send(m.Chat, "У вас нет доступа к серверам этого чата.")
-				return err
-			}
 			owner, err := bot.db.GetChatOwner(chatID)
 			if err != nil || owner == nil {
 				return nil
+			}
+			if bot.lockdownActive(owner.UserID) {
+				_, _ = bot.b.Send(m.Chat, msgLockdownBlocked)
+				return nil
+			}
+			if !bot.canManage(uid, chatID) {
+				_, err := bot.b.Send(m.Chat, "У вас нет доступа к серверам этого чата.")
+				return err
 			}
 			ownerID = owner.UserID
 			servers, _ = bot.db.GetChatServers(chatID)
@@ -231,6 +239,87 @@ func (bot *Bot) cmdRun(c tele.Context) error {
 	})
 }
 
+// cmdConfirm — ручное подтверждение очереди запуска Aternos (ЛС / группа).
+func (bot *Bot) cmdConfirm(c tele.Context) error {
+	return bot.SafeCall(func() error {
+		m := c.Message()
+		if m == nil || m.Sender == nil {
+			return nil
+		}
+		uid := m.Sender.ID
+		chatID := m.Chat.ID
+
+		var ownerID int64
+		var servers []*database.Server
+		chatIDs := []int64{}
+
+		if bot.isPrivate(c) {
+			isOwner, _ := bot.db.IsOwner(uid)
+			if !isOwner {
+				_, err := bot.b.Send(m.Chat, "Сначала пройдите онбординг: /start.")
+				return err
+			}
+			if bot.lockdownActive(uid) {
+				_, _ = bot.b.Send(m.Chat, msgLockdownBlocked)
+				return nil
+			}
+			ownerID = uid
+			servers, _ = bot.db.GetActiveServersByOwner(uid)
+		} else if bot.isGroup(c) {
+			owner, err := bot.db.GetChatOwner(chatID)
+			if err != nil || owner == nil {
+				return nil
+			}
+			if bot.lockdownActive(owner.UserID) {
+				_, _ = bot.b.Send(m.Chat, msgLockdownBlocked)
+				return nil
+			}
+			if !bot.canManage(uid, chatID) {
+				_, err := bot.b.Send(m.Chat, "У вас нет доступа к серверам этого чата.")
+				return err
+			}
+			ownerID = owner.UserID
+			servers, _ = bot.db.GetChatServers(chatID)
+			chatIDs = append(chatIDs, chatID)
+		} else {
+			return nil
+		}
+
+		if len(servers) == 0 {
+			_, err := bot.b.Send(m.Chat, "Нет подключённых серверов.")
+			return err
+		}
+
+		manager := bot.managers.For(ownerID)
+		var confirmed, skipped []string
+		for _, s := range servers {
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			err := manager.ConfirmServer(ctx, s.ID)
+			cancel()
+			if err != nil {
+				skipped = append(skipped, s.DisplayName)
+				continue
+			}
+			confirmed = append(confirmed, s.DisplayName)
+			bot.dash.ClearQueuePosition(s.ID)
+		}
+		bot.dash.UpdateChatsDashboards(context.Background(), bot.b, chatIDs)
+
+		var lines []string
+		if len(confirmed) > 0 {
+			lines = append(lines, "✅ <b>Запуск подтверждён:</b> "+strings.Join(confirmed, ", "))
+		}
+		if len(skipped) > 0 {
+			lines = append(lines, "⏳ <b>Не подтверждены (нет очереди/ошибка):</b> "+strings.Join(skipped, ", "))
+		}
+		if len(lines) == 0 {
+			lines = append(lines, "Ничего не подтверждено.")
+		}
+		_, err := bot.b.Send(m.Chat, strings.Join(lines, "\n"))
+		return err
+	})
+}
+
 // cbRunServer — выбор сервера для /run: запускает конкретный сервер в чате.
 func (bot *Bot) cbRunServer(c tele.Context, parts []string) error {
 	cb := c.Callback()
@@ -242,13 +331,16 @@ func (bot *Bot) cbRunServer(c tele.Context, parts []string) error {
 	chatID := cbInt(parts, 2)
 	uid := cb.Sender.ID
 
-	if !bot.canManage(uid, chatID) {
-		bot.answer(c, "У вас нет доступа к серверам этого чата.", false)
-		return nil
-	}
 	owner, err := bot.db.GetChatOwner(chatID)
 	if err != nil || owner == nil {
 		bot.answer(c, "Чат не привязан к владельцу.", false)
+		return nil
+	}
+	if bot.lockdownBlocked(c, owner.UserID) {
+		return nil
+	}
+	if !bot.canManage(uid, chatID) {
+		bot.answer(c, "У вас нет доступа к серверам этого чата.", false)
 		return nil
 	}
 	server, _ := bot.db.GetServer(serverID)
@@ -291,7 +383,8 @@ func (bot *Bot) cmdGroupHelp(c tele.Context) error {
 					"/run — запустить серверы чата\n"+
 					"/emergency — локдаун (в ЛС с ботом)\n\n"+
 					"<b>Кнопки дашборда:</b>\n"+
-					"▶️ Старт · ⏹ Стоп · ✅ Подтвердить очередь")
+					"▶️ Старт · ⏹ Стоп · ✅ Подтвердить (появляется, когда сервер в очереди)\n"+
+					"Также доступно: /confirm — подтвердить очередь вручную")
 			return err
 		}
 		_, err := bot.b.Send(m.Chat,
@@ -314,7 +407,7 @@ func (bot *Bot) canManage(uid, chatID int64) bool {
 	if owner == nil || owner.LockdownMode {
 		return false
 	}
-	ok, _ := bot.db.UserCanManage(chatID, uid)
+	ok, _ := bot.db.UserCanManage(uid, chatID)
 	return ok
 }
 
@@ -356,10 +449,10 @@ func (bot *Bot) requireChatPermission(c tele.Context) (int64, bool) {
 		return owner.UserID, true
 	}
 	if owner.LockdownMode {
-		bot.answer(c, "🔒 Локдаун активен: управление только у владельца.", false)
+		bot.answer(c, msgLockdownBlocked, false)
 		return 0, false
 	}
-	ok, _ := bot.db.UserCanManage(chatID, cb.Sender.ID)
+	ok, _ := bot.db.UserCanManage(cb.Sender.ID, chatID)
 	if !ok {
 		bot.answer(c, "У вас нет доступа. Нажмите «🙋 Запросить доступ».", false)
 		return 0, false
@@ -391,6 +484,9 @@ func (bot *Bot) cbServerAction(c tele.Context, parts []string) error {
 
 	switch action {
 	case "start":
+		if bot.lockdownBlocked(c, ownerID) {
+			return nil
+		}
 		text, err := manager.StartServer(ctx, serverID)
 		if err != nil {
 			bot.answer(c, friendlyStartError(err), true)
@@ -412,6 +508,9 @@ func (bot *Bot) cbServerAction(c tele.Context, parts []string) error {
 		bot.dash.UpdateChatsDashboards(context.Background(), bot.b, []int64{chatID})
 		bot.broadcastOthers(ownerID, chatID, "🛑 <b>"+text+"</b>")
 	case "confirm":
+		if bot.lockdownBlocked(c, ownerID) {
+			return nil
+		}
 		if err := manager.ConfirmServer(ctx, serverID); err != nil {
 			bot.answer(c, err.Error(), true)
 			return nil
@@ -465,7 +564,7 @@ func (bot *Bot) cbRefreshDashboard(c tele.Context) error {
 		return nil
 	}
 	if owner.UserID != cb.Sender.ID {
-		ok, _ := bot.db.UserCanManage(chatID, cb.Sender.ID)
+		ok, _ := bot.db.UserCanManage(cb.Sender.ID, chatID)
 		if !ok {
 			return nil // нет доступа — молча
 		}

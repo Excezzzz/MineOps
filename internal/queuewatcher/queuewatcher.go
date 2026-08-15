@@ -23,10 +23,12 @@ import (
 )
 
 const (
-	pollInterval    = 15 * time.Second
-	idleTimeout     = 15 * time.Minute
-	maxFailures     = 5
-	dashboardPeriod = 30 * time.Second
+	pollInterval       = 15 * time.Second
+	idleTimeout        = 15 * time.Minute
+	maxFailures        = 5
+	dashboardPeriod    = 30 * time.Second
+	autoConfirmInterval = 60 * time.Second
+	autoConfirmWindow   = 15 * time.Minute
 )
 
 // Watcher — реестр активных наблюдателей.
@@ -56,7 +58,8 @@ func (w *Watcher) IsWatching(serverID int64) bool {
 	return w.active[serverID]
 }
 
-// Start запускает фонового наблюдателя очереди (если ещё не запущен).
+// Start запускает фонового наблюдателя очереди (если ещё не запущен),
+// а также фоновый цикл автоподтверждения запуска.
 func (w *Watcher) Start(b *tele.Bot, ownerID, serverID int64) {
 	w.mu.Lock()
 	if w.active[serverID] {
@@ -66,6 +69,43 @@ func (w *Watcher) Start(b *tele.Bot, ownerID, serverID int64) {
 	w.active[serverID] = true
 	w.mu.Unlock()
 	go w.watchLoop(b, ownerID, serverID)
+	w.StartAutoConfirm(ownerID, serverID)
+}
+
+// StartAutoConfirm запускает фоновый Auto-Confirm Loop: после старта сервера
+// каждые 60 секунд отправляет запрос на подтверждение в Aternos на протяжении
+// 15 минут (или пока статус не станет Онлайн). Ошибки в цикле игнорируются.
+func (w *Watcher) StartAutoConfirm(ownerID, serverID int64) {
+	go w.autoConfirmLoop(ownerID, serverID)
+}
+
+func (w *Watcher) autoConfirmLoop(ownerID, serverID int64) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("auto-confirm loop %d: panic: %v", serverID, r)
+		}
+	}()
+	manager := w.managers.For(ownerID)
+	deadline := time.Now().Add(autoConfirmWindow)
+	for time.Now().Before(deadline) {
+		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		status, err := manager.FetchInfo(ctx, serverID)
+		cancel()
+		if err == nil && status != nil {
+			lang := strings.ToLower(status.Lang)
+			if status.Status == 1 || lang == "on" || lang == "online" {
+				log.Printf("auto-confirm: сервер %d онлайн, цикл завершён", serverID)
+				return
+			}
+		}
+		// Подтверждаем очередь — ошибки игнорируем.
+		cctx, ccancel := context.WithTimeout(context.Background(), 45*time.Second)
+		_ = manager.ConfirmServer(cctx, serverID)
+		ccancel()
+		log.Printf("auto-confirm: сервер %d — отправлен запрос на подтверждение", serverID)
+		time.Sleep(autoConfirmInterval)
+	}
+	log.Printf("auto-confirm: сервер %d — цикл завершён по таймауту (15 мин)", serverID)
 }
 
 // Rescan запускает наблюдение за всеми активными серверами, которые уже

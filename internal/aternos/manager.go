@@ -119,6 +119,7 @@ func (m *Manager) run(ctx context.Context, fn func(ctx context.Context) error) e
 	if err != nil {
 		return err
 	}
+	ctx = ctxWithOwner(ctx, m.ownerID)
 	if err := fn(ctxWithCookie(ctx, cookie)); err != nil {
 		var aerr *Error
 		if asError(err, &aerr) {
@@ -261,7 +262,7 @@ func (m *Manager) ProbeCookie(ctx context.Context, cookie string) error {
 	mu := m.lockFor(m.ownerID)
 	mu.Lock()
 	defer mu.Unlock()
-	_, err := newSession(ctx, m.httpClient, cookie)
+	_, err := newSession(ctxWithOwner(ctx, m.ownerID), m.httpClient, cookie)
 	if err != nil {
 		var aerr *Error
 		if asError(err, &aerr) && isCloudflare(aerr) {
@@ -279,7 +280,7 @@ func (m *Manager) ProbeSession(ctx context.Context, cookie string) ([]ServerBrie
 	mu := m.lockFor(m.ownerID)
 	mu.Lock()
 	defer mu.Unlock()
-	session, err := newSession(ctx, m.httpClient, cookie)
+	session, err := newSession(ctxWithOwner(ctx, m.ownerID), m.httpClient, cookie)
 	if err != nil {
 		var aerr *Error
 		if asError(err, &aerr) && isCloudflare(aerr) {

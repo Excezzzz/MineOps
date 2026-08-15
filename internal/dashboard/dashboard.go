@@ -34,6 +34,7 @@ type DashServer struct {
 	PlayerList    []string
 	Version       string
 	Port          int
+	Starting      bool // в процессе запуска/в очереди — показывать «Подтвердить»
 }
 
 // KBFactory создаёт клавиатуру дашборда для чата (инжектится из telegram,
@@ -287,10 +288,21 @@ func panelToStatus(server *database.Server, panel *aternos.ServerInfo) DashServe
 	}
 }
 
+// startingState — сервер в процессе запуска (запускается или стоит в очереди),
+// когда пользователю нужна кнопка «Подтвердить».
+func (d *Dashboard) startingState(serverID int64, online bool) bool {
+	if online {
+		return false
+	}
+	return d.IsStarting() || d.queuePosition(serverID) > 0
+}
+
 // GetAuthoritativeStatus — панель Aternos, иначе честный mcsrvstat.
 func (d *Dashboard) GetAuthoritativeStatus(ctx context.Context, ownerID int64, server *database.Server) DashServer {
 	if panel := d.getPanelCached(ctx, ownerID, server.ID); panel != nil {
-		return panelToStatus(server, panel)
+		st := panelToStatus(server, panel)
+		st.Starting = d.startingState(server.ID, st.IsOnline)
+		return st
 	}
 	port := d.ensureServerPort(ctx, ownerID, server.ID)
 	status := mcsrvstat.GetServerStatus(server.ServerIP, port, false)
@@ -304,6 +316,7 @@ func (d *Dashboard) GetAuthoritativeStatus(ctx context.Context, ownerID int64, s
 		PlayerList:    status.PlayerList,
 		Version:       status.Version,
 		Port:          status.Port,
+		Starting:      d.startingState(server.ID, status.IsOnline),
 	}
 }
 

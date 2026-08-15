@@ -80,13 +80,15 @@ func (bot *Bot) cmdHelp(c tele.Context) error {
 				"<b>Команды владельца:</b>\n"+
 					"/panel — панель (серверы, чаты, настройки, аудит)\n"+
 					"/run — запустить все серверы\n"+
+					"/confirm — подтвердить очередь запуска\n"+
 					"/status — статус всех серверов\n"+
 					"/set_session — обновить куку Aternos\n"+
-					"/emergency — локдаун (вкл/выкл)\n\n"+
+					"/emergency — экстренный локдаун (права всем: OFF)\n\n"+
 					"<b>В группе:</b>\n"+
 					"/link — привязать чат (серверы выбираются в ЛС)\n"+
 					"/unlink — отвязать чат\n"+
 					"/run — запустить серверы чата\n"+
+					"/confirm — подтвердить очередь\n"+
 					"/status — статус серверов чата")
 			return err
 		}
@@ -360,6 +362,9 @@ func (bot *Bot) cbPanelAction(c tele.Context, parts []string) error {
 
 	switch action {
 	case "start":
+		if bot.lockdownBlocked(c, uid) {
+			return nil
+		}
 		text, err := manager.StartServer(ctx, server.ID)
 		if err != nil {
 			bot.answer(c, err.Error(), true)
@@ -379,6 +384,9 @@ func (bot *Bot) cbPanelAction(c tele.Context, parts []string) error {
 		bot.answer(c, text, false)
 		bot.dash.UpdateChatsDashboards(context.Background(), bot.b, chatIDs)
 	case "confirm":
+		if bot.lockdownBlocked(c, uid) {
+			return nil
+		}
 		if err := manager.ConfirmServer(ctx, server.ID); err != nil {
 			bot.answer(c, err.Error(), true)
 			return nil
@@ -682,27 +690,30 @@ func (bot *Bot) cmdEmergency(c tele.Context) error {
 			return nil
 		}
 		uid := m.Sender.ID
-		isOwner, _ := bot.db.IsOwner(uid)
-		if !isOwner {
-			_, err := bot.b.Send(m.Chat, "❌ Только владелец может управлять локдауном.")
-			return err
+		if uid != bot.cfg.OwnerID {
+			return nil // молча: только владелец
 		}
 		owner, _ := bot.db.GetOwner(uid)
-		newState := true
-		if owner != nil && owner.LockdownMode {
-			newState = false
+		if owner == nil {
+			_, err := bot.b.Send(m.Chat, "Сначала пройдите онбординг: /start.")
+			return err
 		}
-		_ = bot.db.SetOwnerLockdown(uid, newState)
-		_ = bot.db.LogAction(uid, "lockdown", boolText(newState), 0, 0, 0)
+		// 1) Мгновенно отбираем права у ВСЕХ пользователей всех чатов.
+		if err := bot.db.RevokeAllAccess(); err != nil {
+			log.Printf("emergency: сброс прав не удался: %v", err)
+		}
+		// 2) Глобальный флаг lockdown_mode = ON.
+		_ = bot.db.SetOwnerLockdown(uid, true)
+		_ = bot.db.LogAction(uid, "emergency",
+			"полный локдаун: права всех пользователей отозваны, запуск невозможен", 0, 0, 0)
 		chats, _ := bot.db.GetChatsByOwner(uid)
 		chatIDs := make([]int64, 0, len(chats))
 		for _, ch := range chats {
 			chatIDs = append(chatIDs, ch.ChatID)
 		}
-		text := "✅ <b>Локдаун снят:</b> управление серверами снова доступно."
-		if newState {
-			text = "🔒 <b>Локдаун включён:</b> управление серверами приостановлено до команды /emergency."
-		}
+		text := "🚨 <b>Экстренная блокировка включена.</b>\n" +
+			"Права всех пользователей отозваны (has_access=0). Запуск серверов невозможен, " +
+			"пока локдаун не будет снят в /panel → ⚙️ Настройки → «Локдаун»."
 		bot.dash.BroadcastMessage(bot.b, chatIDs, text)
 		_, err := bot.b.Send(m.Chat, text)
 		return err

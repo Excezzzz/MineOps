@@ -857,6 +857,13 @@ func (d *DB) UpsertChatUser(chatID, userID int64, username, fullName string) err
 	return err
 }
 
+// RevokeAllAccess мгновенно отбирает право управления (has_access=0)
+// у ВСЕХ пользователей всех чатов (экстренный локдаун).
+func (d *DB) RevokeAllAccess() error {
+	_, err := d.db.Exec("UPDATE users SET has_access = 0")
+	return err
+}
+
 // GetUserAccess возвращает право доступа пользователя в чате.
 func (d *DB) GetUserAccess(userID, chatID int64) (bool, error) {
 	var v int

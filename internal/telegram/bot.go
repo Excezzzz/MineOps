@@ -32,11 +32,16 @@ type Bot struct {
 	mu              sync.Mutex
 	lastAccessReq   map[int64]time.Time // cooldown запросов доступа (5 мин)
 	lastErrNotified time.Time           // анти-спам уведомлений суперадмину
+
+	sessionNotifyMu   sync.Mutex
+	lastSessionNotify map[int64]time.Time // анти-спам уведомлений о просрочке куки
 }
 
 const (
-	accessReqCooldown = 5 * time.Minute
-	errNotifyMinGap   = time.Minute
+	accessReqCooldown     = 5 * time.Minute
+	errNotifyMinGap       = time.Minute
+	sessionNotifyCooldown = 10 * time.Minute
+	msgLockdownBlocked    = "🚨 Включена экстренная блокировка. Запуск невозможен."
 )
 
 // NewBot создаёт и настраивает telebot.
@@ -44,13 +49,14 @@ func NewBot(cfg *config.Config, db *database.DB, managers *aternos.Registry,
 	dash *dashboard.Dashboard, watcher *queuewatcher.Watcher) (*Bot, error) {
 
 	bot := &Bot{
-		cfg:           cfg,
-		db:            db,
-		managers:      managers,
-		dash:          dash,
-		watcher:       watcher,
-		fsm:           NewFSM(),
-		lastAccessReq: make(map[int64]time.Time),
+		cfg:               cfg,
+		db:                db,
+		managers:          managers,
+		dash:              dash,
+		watcher:           watcher,
+		fsm:               NewFSM(),
+		lastAccessReq:     make(map[int64]time.Time),
+		lastSessionNotify: make(map[int64]time.Time),
 	}
 
 	pref := tele.Settings{
@@ -111,6 +117,7 @@ func (bot *Bot) registerHandlers() {
 	b.Handle("/set_session", bot.cmdSetSession)
 	b.Handle("/emergency", bot.cmdEmergency)
 	b.Handle("/announce", bot.cmdAnnounce)
+	b.Handle("/confirm", bot.cmdConfirm)
 
 	// Группы: /link, /unlink, /status, /run
 	b.Handle("/link", bot.cmdLink)
@@ -135,6 +142,7 @@ func (bot *Bot) setCommands() {
 		tele.Command{Text: "help", Description: "Справка"},
 		tele.Command{Text: "status", Description: "Статус серверов (группа / ЛС)"},
 		tele.Command{Text: "run", Description: "Запустить серверы (группа / ЛС)"},
+		tele.Command{Text: "confirm", Description: "Подтвердить очередь запуска"},
 		tele.Command{Text: "link", Description: "Привязать чат (в группе, владелец)"},
 		tele.Command{Text: "unlink", Description: "Отвязать чат (в группе, владелец)"},
 		tele.Command{Text: "set_session", Description: "Обновить куку Aternos"},
@@ -146,8 +154,11 @@ func (bot *Bot) setCommands() {
 // мидлвари
 // ------------------------------------------------------------------ //
 
-// firewall — аналог FirewallMiddleware: ЛС пропускает; группы — только
-// привязанные к владельцу или если отправитель — владелец; прочее игнор.
+// firewall — аналог FirewallMiddleware для ПРИВАТНОГО бота:
+//   * ЛС: жёсткий фаервол — отвечаем ТОЛЬКО владельцу (OWNER_ID из конфига);
+//     чужие люди молча игнорируются и не получают никакого ответа;
+//   * группы: привязанные к владельцу чаты работают в штатном режиме,
+//     права разруливаются через RBAC; прочее — игнор.
 func (bot *Bot) firewall(c tele.Context) bool {
 	if c.Message() == nil {
 		return true
@@ -158,7 +169,10 @@ func (bot *Bot) firewall(c tele.Context) bool {
 	}
 	switch m.Chat.Type {
 	case tele.ChatPrivate:
-		return true
+		if m.Sender == nil {
+			return false
+		}
+		return m.Sender.ID == bot.cfg.OwnerID
 	case tele.ChatGroup, tele.ChatSuperGroup:
 		owner, err := bot.db.GetChatOwner(m.Chat.ID)
 		if err == nil && owner != nil {
@@ -190,6 +204,52 @@ func (bot *Bot) registerUser(c tele.Context) {
 		return
 	}
 	_ = bot.db.UpsertChatUser(m.Chat.ID, m.Sender.ID, m.Sender.Username, m.Sender.FirstName+" "+m.Sender.LastName)
+}
+
+// lockdownActive — включён ли режим экстренной блокировки у владельца.
+func (bot *Bot) lockdownActive(ownerID int64) bool {
+	on, _ := bot.db.GetOwnerLockdown(ownerID)
+	return on
+}
+
+// lockdownBlocked — если у владельца включён локдаун, отвечает пользователю
+// сообщением о блокировке (кнопка — всплывающее уведомление, команда —
+// текст) и возвращает true: запуск заблокирован.
+func (bot *Bot) lockdownBlocked(c tele.Context, ownerID int64) bool {
+	if !bot.lockdownActive(ownerID) {
+		return false
+	}
+	if cb := c.Callback(); cb != nil {
+		bot.answer(c, msgLockdownBlocked, true)
+		return true
+	}
+	if m := c.Message(); m != nil && m.Chat != nil {
+		_, _ = bot.b.Send(m.Chat, msgLockdownBlocked)
+	}
+	return true
+}
+
+// NotifySessionExpired — уведомление Владельца в ЛС, что сессия Aternos
+// истекла (срабатывает из перехватчика HTTP-запросов к Aternos).
+// Анти-спам: не чаще одного сообщения на владельца в 10 минут.
+func (bot *Bot) NotifySessionExpired(ownerID int64) {
+	if ownerID <= 0 {
+		return
+	}
+	bot.sessionNotifyMu.Lock()
+	now := time.Now()
+	if last, ok := bot.lastSessionNotify[ownerID]; ok && now.Sub(last) < sessionNotifyCooldown {
+		bot.sessionNotifyMu.Unlock()
+		return
+	}
+	bot.lastSessionNotify[ownerID] = now
+	bot.sessionNotifyMu.Unlock()
+
+	_, err := bot.b.Send(&tele.Chat{ID: ownerID},
+		"⚠️ <b>Внимание!</b> Сессия Aternos истекла. Скопируйте новую куку ATERNOS_SESSION и отправьте:\n<code>/set_session ВАША_КУКА</code>")
+	if err != nil {
+		log.Printf("не удалось уведомить владельца %d о сессии: %v", ownerID, err)
+	}
 }
 
 // ------------------------------------------------------------------ //
