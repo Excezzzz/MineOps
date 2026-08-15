@@ -24,7 +24,7 @@ import (
 
 const (
 	pollInterval    = 15 * time.Second
-	watchTimeout    = 15 * time.Minute
+	idleTimeout     = 15 * time.Minute
 	maxFailures     = 5
 	dashboardPeriod = 30 * time.Second
 )
@@ -68,6 +68,38 @@ func (w *Watcher) Start(b *tele.Bot, ownerID, serverID int64) {
 	go w.watchLoop(b, ownerID, serverID)
 }
 
+// Rescan запускает наблюдение за всеми активными серверами, которые уже
+// находятся в очереди Aternos (пережили перезапуск бота). Каждый сервер
+// проверяется панелью один раз; если он в состоянии запуска/очереди —
+// за ним начинает следить watcher.
+func (w *Watcher) Rescan(b *tele.Bot) {
+	owners, err := w.db.GetAllOwners()
+	if err != nil {
+		log.Printf("queuewatcher: rescan: владельцы не получены: %v", err)
+		return
+	}
+	for _, owner := range owners {
+		servers, err := w.db.GetActiveServersByOwner(owner.UserID)
+		if err != nil {
+			continue
+		}
+		manager := w.managers.For(owner.UserID)
+		for _, s := range servers {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			info, err := manager.FetchInfo(ctx, s.ID)
+			cancel()
+			if err != nil {
+				continue
+			}
+			lang := strings.ToLower(info.Lang)
+			if lang == "" || lang == "off" || lang == "offline" || lang == "stop" || lang == "stopped" {
+				continue
+			}
+			w.Start(b, owner.UserID, s.ID)
+		}
+	}
+}
+
 func (w *Watcher) watchLoop(b *tele.Bot, ownerID, serverID int64) {
 	defer func() {
 		w.mu.Lock()
@@ -79,11 +111,14 @@ func (w *Watcher) watchLoop(b *tele.Bot, ownerID, serverID int64) {
 	}()
 
 	manager := w.managers.For(ownerID)
-	deadline := time.Now().Add(watchTimeout)
 	failures := 0
 	lastDashUpdate := time.Time{}
+	// inactiveSince — когда сервер последний раз был в «неактивном» состоянии
+	// (не в очереди и не грузится). Если он так и не запустился в течение
+	// idleTimeout — считаем запуск проваленным и уведомляем владельца.
+	var inactiveSince time.Time
 
-	for time.Now().Before(deadline) {
+	for {
 		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		status, err := manager.FetchInfo(ctx, serverID)
 		cancel()
@@ -105,8 +140,13 @@ func (w *Watcher) watchLoop(b *tele.Bot, ownerID, serverID int64) {
 		log.Printf("queuewatcher: сервер %d: status=%d lang=%q queue=%v",
 			serverID, status.Status, serverLang, status.Queue)
 
+		// active — сервер в состоянии, когда запуск ещё в процессе
+		// (очередь идёт, сервер грузится или просит подтверждение).
+		active := false
+
 		// Aternos просит подтверждение запуска — ТОЛЬКО при явном сигнале.
 		if strings.Contains(strings.ToLower(serverLang), "confirm") {
+			active = true
 			// Свежий контекст: предыдущий уже отменён (cancel() после FetchInfo),
 			// иначе ConfirmServer сразу упадёт с context canceled.
 			cctx, ccancel := context.WithTimeout(context.Background(), 45*time.Second)
@@ -126,6 +166,7 @@ func (w *Watcher) watchLoop(b *tele.Bot, ownerID, serverID int64) {
 
 		switch serverLang {
 		case "waiting", "preparing":
+			active = true
 			if queueValue > 0 {
 				w.dash.SetQueuePosition(serverID, queueValue)
 				log.Printf("queuewatcher: сервер %d: очередь идёт, позиция %d", serverID, queueValue)
@@ -136,6 +177,7 @@ func (w *Watcher) watchLoop(b *tele.Bot, ownerID, serverID int64) {
 				lastDashUpdate = now
 			}
 		case "loading", "starting":
+			active = true
 			log.Printf("queuewatcher: сервер %d: грузится (lang=%q), ждём запуска", serverID, serverLang)
 		case "on", "online":
 			log.Printf("queuewatcher: сервер %d: онлайн, watcher завершён", serverID)
@@ -148,11 +190,21 @@ func (w *Watcher) watchLoop(b *tele.Bot, ownerID, serverID int64) {
 		default:
 			log.Printf("queuewatcher: сервер %d: состояние lang=%q, ждём итерации", serverID, serverLang)
 		}
+
+		if active {
+			inactiveSince = time.Time{}
+		} else if inactiveSince.IsZero() {
+			inactiveSince = time.Now()
+		} else if time.Since(inactiveSince) >= idleTimeout {
+			w.dash.ClearQueuePosition(serverID)
+			w.notifyOwner(b, ownerID, serverID, "сервер не запустился (15 минут вне очереди)")
+			w.refreshDashboard(b, serverID)
+			return
+		}
 		time.Sleep(pollInterval)
 	}
 
 	w.dash.ClearQueuePosition(serverID)
-	w.notifyOwner(b, ownerID, serverID, "таймаут 15 минут: очередь не была пройдена")
 	w.refreshDashboard(b, serverID)
 }
 

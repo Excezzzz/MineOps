@@ -64,5 +64,11 @@ func main() {
 	log.Printf("планировщик запущен: дашборд %ds, сессии %ds", cfg.UpdateInterval, cfg.SessionCheck)
 
 	log.Printf("бот запущен (pid %d)", os.Getpid())
+	// Восстановить наблюдение за серверами, которые уже в очереди Aternos
+	// (watcher'ы живут в памяти и теряются при перезапуске бота).
+	go func() {
+		time.Sleep(5 * time.Second)
+		watcher.Rescan(bot.Bot())
+	}()
 	bot.Start()
 }
