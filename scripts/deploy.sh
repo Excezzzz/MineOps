@@ -44,8 +44,14 @@ esac
 # --- переходим в корень проекта ------------------------------
 cd "$(dirname "$0")/.."
 
+# --- 0. кросс-компиляция бинарника ----------------------------
+log "🔨 Шаг 0/3: Кросс-компиляция бинарника (linux/amd64) ..."
+mkdir -p bin
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o bin/mineops ./cmd/bot
+ok "✅ Бинарник bin/mineops собран"
+
 # --- 1. копирование файлов -----------------------------------
-log "🚀 Шаг 1/2: Копирование файлов на ${TARGET}:~/mineops ..."
+log "🚀 Шаг 1/3: Копирование файлов на ${TARGET}:~/mineops ..."
 
 EXCLUDES=(--exclude=data --exclude=venv --exclude=.venv --exclude=.git \
           --exclude=__pycache__ --exclude='*.pyc')
@@ -65,8 +71,10 @@ else
 fi
 
 # --- 2. сборка и запуск Docker --------------------------------
-log "📦 Шаг 2/2: Сборка и запуск Docker на ${TARGET} ..."
+log "📦 Шаг 2/3: Сборка и запуск Docker на ${TARGET} ..."
 ssh "${SSH_OPTS[@]}" "${TARGET}" 'cd ~/mineops && if docker compose version >/dev/null 2>&1; then DC="docker compose"; elif docker-compose version >/dev/null 2>&1; then DC="docker-compose"; else echo "Error: Docker Compose not found" >&2; exit 1; fi && $DC up -d --build'
 
+# --- 3. очистка ------------------------------------------------
+rm -rf bin
 ok "✅ Готово! Бот пересобран и запущен на ${TARGET}."
 log "📖 Логи: ssh ${TARGET} 'cd ~/mineops && docker compose logs -f'"
