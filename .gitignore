@@ -1,28 +1,27 @@
-# --- secrets ---
+# Secrets & data
 .env
+data/secret.key
+data/*.db
+data/*.db-journal
 
-# --- database & runtime data ---
-data/
-bot_data.db
-*.db-wal
-*.db-shm
-
-# --- python ---
+# Python
 __pycache__/
-*.py[cod]
+*.pyc
+*.pyo
 .venv/
 venv/
-*.egg-info/
-.pytest_cache/
 
-# --- logs ---
-*.log
+# Docker
+docker-compose.override.yml
 
-# --- cross-compiled binary (deploy artifact) ---
-bin/
-
-# --- os / editors ---
+# IDE & OS
+.idea/
+.vscode/
+*.swp
 .DS_Store
 Thumbs.db
 .idea/
 .vscode/deploy.tar.gz
+
+# Logs
+.log
