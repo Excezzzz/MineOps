@@ -154,10 +154,10 @@ func (bot *Bot) setCommands() {
 // мидлвари
 // ------------------------------------------------------------------ //
 
-// firewall — аналог FirewallMiddleware для ПРИВАТНОГО бота:
-//   * ЛС: жёсткий фаервол — отвечаем ТОЛЬКО владельцу (OWNER_ID из конфига);
-//     чужие люди молча игнорируются и не получают никакого ответа;
-//   * группы: привязанные к владельцу чаты работают в штатном режиме,
+// firewall — мидлварь доступа:
+//   * ЛС: публичный онбординг — любой пользователь может пройти /start,
+//     добавить свои серверы Aternos и управлять ими (multi-tenant);
+//   * группы: привязанные к любому владельцу чаты работают в штатном режиме,
 //     права разруливаются через RBAC; прочее — игнор.
 func (bot *Bot) firewall(c tele.Context) bool {
 	if c.Message() == nil {
@@ -169,10 +169,7 @@ func (bot *Bot) firewall(c tele.Context) bool {
 	}
 	switch m.Chat.Type {
 	case tele.ChatPrivate:
-		if m.Sender == nil {
-			return false
-		}
-		return m.Sender.ID == bot.cfg.OwnerID
+		return true
 	case tele.ChatGroup, tele.ChatSuperGroup:
 		owner, err := bot.db.GetChatOwner(m.Chat.ID)
 		if err == nil && owner != nil {

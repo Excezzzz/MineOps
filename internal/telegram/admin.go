@@ -238,7 +238,7 @@ func (bot *Bot) refreshServers(c tele.Context) {
 				reactivated = append(reactivated, s.DisplayName)
 			}
 		} else {
-			id, err := bot.db.AddServer(uid, s.AternosID, s.ServerIP, s.DisplayName, nil)
+			id, err := bot.db.AddServer(uid, s.AternosID, s.ServerIP, s.DisplayName)
 			if err == nil && id > 0 {
 				added = append(added, s.DisplayName)
 			}
@@ -690,8 +690,8 @@ func (bot *Bot) cmdEmergency(c tele.Context) error {
 			return nil
 		}
 		uid := m.Sender.ID
-		if uid != bot.cfg.OwnerID {
-			return nil // молча: только владелец
+		if uid != bot.cfg.SuperAdminID {
+			return nil // молча: только суперадмин
 		}
 		owner, _ := bot.db.GetOwner(uid)
 		if owner == nil {

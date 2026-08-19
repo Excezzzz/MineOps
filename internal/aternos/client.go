@@ -28,6 +28,8 @@ import (
 	"strings"
 	"time"
 
+	"mineops/internal/util"
+
 	"github.com/dop251/goja"
 )
 
@@ -84,46 +86,6 @@ type ServerInfo struct {
 // ------------------------------------------------------------------ //
 // утилиты
 // ------------------------------------------------------------------ //
-
-func toInt(v any) int {
-	switch t := v.(type) {
-	case int:
-		return t
-	case int64:
-		return int(t)
-	case float64:
-		return int(t)
-	case string:
-		var n int
-		fmt.Sscanf(t, "%d", &n)
-		return n
-	case json.Number:
-		n, _ := t.Int64()
-		return int(n)
-	}
-	return 0
-}
-
-func toStr(v any) string {
-	if s, ok := v.(string); ok {
-		return s
-	}
-	return ""
-}
-
-func toStrList(v any) []string {
-	arr, ok := v.([]any)
-	if !ok {
-		return nil
-	}
-	out := make([]string, 0, len(arr))
-	for _, item := range arr {
-		if s, ok := item.(string); ok {
-			out = append(out, s)
-		}
-	}
-	return out
-}
 
 // ------------------------------------------------------------------ //
 // токен: парсинг и выполнение JS
@@ -415,16 +377,16 @@ func (s *Session) FetchServerInfo(ctx context.Context, servID string) (*ServerIn
 		return nil, fmt.Errorf("битый JSON lastStatus: %w", err)
 	}
 	info := &ServerInfo{
-		Status:     toInt(raw["status"]),
+		Status:     util.ToInt(raw["status"]),
 		Players:    raw["players"],
 		Slots:      raw["slots"],
 		Queue:      raw["queue"],
-		Lang:       toStr(raw["lang"]),
+		Lang:       util.ToStr(raw["lang"]),
 		Port:       raw["port"],
-		Version:    toStr(raw["version"]),
-		PlayerList: toStrList(raw["playerlist"]),
-		Name:       toStr(raw["name"]),
-		IP:         toStr(raw["ip"]),
+		Version:    util.ToStr(raw["version"]),
+		PlayerList: util.ToStrList(raw["playerlist"]),
+		Name:       util.ToStr(raw["name"]),
+		IP:         util.ToStr(raw["ip"]),
 	}
 	return info, nil
 }
@@ -447,7 +409,7 @@ func (s *Session) ListServers(ctx context.Context) ([]ServerBrief, error) {
 		brief := ServerBrief{AternosID: id, DisplayName: id}
 		if info, err := s.FetchServerInfo(ctx, id); err == nil {
 			brief.ServerIP = info.IP
-			brief.DisplayName = firstNonEmpty(info.Name, info.IP, id)
+			brief.DisplayName = util.FirstNonEmpty(info.Name, info.IP, id)
 			if brief.ServerIP == "" {
 				// IP не отдан панелью — собираем адрес из id сервера
 				// (как _get_server_address в python-aternos).
@@ -474,15 +436,6 @@ func parseServerIDs(html string) []string {
 		}
 	}
 	return ids
-}
-
-func firstNonEmpty(vals ...string) string {
-	for _, v := range vals {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
 }
 
 // actionServer выполняет ajax-действие над сервером (start/stop/confirm/...).
@@ -527,7 +480,7 @@ func (s *Session) Start(ctx context.Context, servID string) error {
 	if success, _ := result["success"].(bool); success {
 		return nil
 	}
-	reason := toStr(result["error"])
+	reason := util.ToStr(result["error"])
 	if reason == "eula" {
 		if _, err := s.actionServer(ctx, "accept-eula", servID, nil); err != nil {
 			log.Printf("aternos: accept-eula не выполнен: %v", err)
@@ -538,7 +491,7 @@ func (s *Session) Start(ctx context.Context, servID string) error {
 		if success, _ := result["success"].(bool); success {
 			return nil
 		}
-		reason = toStr(result["error"])
+		reason = util.ToStr(result["error"])
 	}
 	return fmt.Errorf("%s", serverStartReason(reason))
 }

@@ -15,7 +15,6 @@ import (
 type Config struct {
 	BotToken       string
 	SuperAdminID   int64
-	OwnerID        int64
 	EncryptionKey  string
 	DBPath         string
 	TraceMem       bool
@@ -31,20 +30,21 @@ func Load() (*Config, error) {
 	if token == "" {
 		return nil, fmt.Errorf("BOT_TOKEN is missing in .env")
 	}
-	// Единственный владелец приватного бота: OWNER_ID (legacy-алиас SUPER_ADMIN_ID).
-	ownerRaw := strings.TrimSpace(os.Getenv("OWNER_ID"))
-	if ownerRaw == "" {
-		ownerRaw = strings.TrimSpace(os.Getenv("SUPER_ADMIN_ID"))
+	// Суперадмин бота: SUPER_ADMIN_ID (legacy-алиас OWNER_ID). Получает
+	// уведомления об ошибках, может рассылать /announce. Остальные
+	// пользователи проходят онбординг через /start.
+	adminRaw := strings.TrimSpace(os.Getenv("SUPER_ADMIN_ID"))
+	if adminRaw == "" {
+		adminRaw = strings.TrimSpace(os.Getenv("OWNER_ID"))
 	}
-	ownerID, err := strconv.ParseInt(ownerRaw, 10, 64)
-	if err != nil || ownerID <= 0 {
-		return nil, fmt.Errorf("OWNER_ID (или SUPER_ADMIN_ID) is missing or invalid in .env")
+	adminID, err := strconv.ParseInt(adminRaw, 10, 64)
+	if err != nil || adminID <= 0 {
+		return nil, fmt.Errorf("SUPER_ADMIN_ID (или OWNER_ID) is missing or invalid in .env")
 	}
 
 	cfg := &Config{
 		BotToken:       token,
-		SuperAdminID:   ownerID,
-		OwnerID:        ownerID,
+		SuperAdminID:   adminID,
 		EncryptionKey:  strings.TrimSpace(os.Getenv("ENCRYPTION_KEY")),
 		DBPath:         envOr("DB_PATH", "data/mineops.db"),
 		TraceMem:       os.Getenv("TRACE_MEM") == "1",

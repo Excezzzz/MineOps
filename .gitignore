@@ -1,15 +1,18 @@
-# Secrets & data
+# Binary / build
+bin/
+*.exe
+deploy.tar.gz
+
+# Data & secrets
 .env
 data/secret.key
 data/*.db
+data/*.db-shm
+data/*.db-wal
 data/*.db-journal
 
-# Python
-__pycache__/
-*.pyc
-*.pyo
-.venv/
-venv/
+# Go
+vendor/
 
 # Docker
 docker-compose.override.yml
@@ -18,10 +21,9 @@ docker-compose.override.yml
 .idea/
 .vscode/
 *.swp
+*.swo
 .DS_Store
 Thumbs.db
-.idea/
-.vscode/deploy.tar.gz
 
 # Logs
-.log
+*.log

@@ -6,6 +6,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/go-co-op/gocron"
@@ -74,5 +76,19 @@ func main() {
 		time.Sleep(5 * time.Second)
 		watcher.Rescan(bot.Bot())
 	}()
+
+	// Graceful shutdown: SIGINT/SIGTERM → останавливаем планировщик, бота, БД.
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sig
+		log.Println("получен сигнал остановки, завершаю работу...")
+		s.Stop()
+		bot.Bot().Stop()
+		_ = db.Close()
+		log.Println("shutdown complete")
+		os.Exit(0)
+	}()
+
 	bot.Start()
 }

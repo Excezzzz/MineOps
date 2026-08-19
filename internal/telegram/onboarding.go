@@ -12,8 +12,6 @@ import (
 	"mineops/internal/crypto"
 )
 
-const defaultMaxServers = 2
-
 // startOnboarding — начало онбординга (вызывается из /start).
 func (bot *Bot) startOnboarding(c tele.Context) {
 	m := c.Message()
@@ -69,9 +67,8 @@ func (bot *Bot) onSessionCookie(c tele.Context) {
 	bot.fsm.SetData(m.Sender.ID, "servers", servers)
 	bot.fsm.SetData(m.Sender.ID, "selected", map[string]bool{})
 	_, _ = bot.b.Edit(statusMsg,
-		"✅ Сессия действительна! Выберите серверы для управления "+
-			"(максимум 2):",
-		serverPickerKB(servers, map[string]bool{}, defaultMaxServers))
+		"✅ Сессия действительна! Выберите серверы для управления:",
+		serverPickerKB(servers, map[string]bool{}))
 }
 
 // cbOnboarding — чекбоксы выбора серверов и кнопка «Готово».
@@ -101,15 +98,12 @@ func (bot *Bot) cbOnboarding(c tele.Context, parts []string) error {
 
 		if selected[sid] {
 			delete(selected, sid)
-		} else if len(selected) < defaultMaxServers {
-			selected[sid] = true
 		} else {
-			bot.answer(c, "Можно выбрать не более 2 серверов.", false)
-			return nil
+			selected[sid] = true
 		}
 		bot.fsm.SetData(cb.Sender.ID, "selected", selected)
 		_ = bot.edit(cb.Message, "✅ Сессия действительна! Выберите серверы:",
-			serverPickerKB(servers, selected, defaultMaxServers))
+			serverPickerKB(servers, selected))
 		return nil
 	}
 
@@ -137,7 +131,7 @@ func (bot *Bot) cbOnboarding(c tele.Context, parts []string) error {
 		uid := cb.Sender.ID
 		if err := bot.db.CreateOwner(uid,
 			cb.Sender.Username, cb.Sender.FirstName+" "+cb.Sender.LastName,
-			crypto.EncryptSession(cookie), defaultMaxServers); err != nil {
+			crypto.EncryptSession(cookie)); err != nil {
 			log.Printf("onboarding: создание владельца %d не удалось: %v", uid, err)
 			bot.answer(c, "❌ Не удалось создать аккаунт. Попробуйте /start заново.", true)
 			return nil
@@ -145,7 +139,7 @@ func (bot *Bot) cbOnboarding(c tele.Context, parts []string) error {
 		added := []string{}
 		for _, s := range servers {
 			if selected[s.AternosID] {
-				id, err := bot.db.AddServer(uid, s.AternosID, s.ServerIP, s.DisplayName, nil)
+				id, err := bot.db.AddServer(uid, s.AternosID, s.ServerIP, s.DisplayName)
 				if err == nil && id > 0 {
 					added = append(added, s.DisplayName)
 				}

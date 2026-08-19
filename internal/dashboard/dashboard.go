@@ -21,6 +21,7 @@ import (
 	"mineops/internal/aternos"
 	"mineops/internal/database"
 	"mineops/internal/mcsrvstat"
+	"mineops/internal/util"
 )
 
 // DashServer — сервер со статусом (для рендера дашборда).
@@ -203,27 +204,11 @@ func (d *Dashboard) ensureServerPort(ctx context.Context, ownerID, serverID int6
 	// тик дашборда долбит /server на Aternos.
 	info := d.getPanelCached(ctx, ownerID, serverID)
 	if info != nil {
-		p := toIntAny(info.Port)
+		p := util.ToInt(info.Port)
 		if p > 0 && p != 25565 {
 			_ = d.db.SetServerPort(serverID, p)
 			return p
 		}
-	}
-	return 0
-}
-
-func toIntAny(v any) int {
-	switch t := v.(type) {
-	case int:
-		return t
-	case int64:
-		return int(t)
-	case float64:
-		return int(t)
-	case string:
-		var n int
-		fmt.Sscanf(t, "%d", &n)
-		return n
 	}
 	return 0
 }
@@ -265,11 +250,11 @@ func (d *Dashboard) getPanelCached(ctx context.Context, ownerID, serverID int64)
 func panelToStatus(server *database.Server, panel *aternos.ServerInfo) DashServer {
 	online := panel.Status == 1
 	names := panel.PlayerList
-	port := toIntAny(panel.Port)
+	port := util.ToInt(panel.Port)
 	var players, slots int
 	if online {
-		players = toIntAny(panel.Players)
-		slots = toIntAny(panel.Slots)
+		players = util.ToInt(panel.Players)
+		slots = util.ToInt(panel.Slots)
 	}
 	version := panel.Version
 	if version == "" {

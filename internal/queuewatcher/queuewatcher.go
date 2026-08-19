@@ -20,6 +20,7 @@ import (
 	"mineops/internal/aternos"
 	"mineops/internal/dashboard"
 	"mineops/internal/database"
+	"mineops/internal/util"
 )
 
 const (
@@ -221,7 +222,7 @@ func (w *Watcher) watchLoop(b *tele.Bot, ownerID, serverID int64) {
 			log.Printf("queuewatcher: сервер %d: грузится (lang=%q), ждём запуска", serverID, serverLang)
 		case "on", "online":
 			log.Printf("queuewatcher: сервер %d: онлайн, watcher завершён", serverID)
-			if p := toIntAny(status.Port); p > 0 {
+			if p := util.ToInt(status.Port); p > 0 {
 				_ = w.db.SetServerPort(serverID, p)
 			}
 			w.dash.ClearQueuePosition(serverID)
@@ -309,20 +310,6 @@ func parseIntFrom(v any) int {
 	case int:
 		return t
 	case int64:
-		return int(t)
-	case string:
-		return parseInt(t)
-	}
-	return 0
-}
-
-func toIntAny(v any) int {
-	switch t := v.(type) {
-	case int:
-		return t
-	case int64:
-		return int(t)
-	case float64:
 		return int(t)
 	case string:
 		return parseInt(t)

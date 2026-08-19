@@ -346,15 +346,15 @@ func (d *DB) createV2Schema() error {
 // ------------------------------------------------------------------ //
 
 // CreateOwner создаёт владельца с зашифрованной кукой (idempotent upsert).
-func (d *DB) CreateOwner(userID int64, username, fullName, session string, maxServers int) error {
+func (d *DB) CreateOwner(userID int64, username, fullName, session string) error {
 	now := nowISO()
 	_, err := d.db.Exec(
 		"INSERT INTO owners (user_id, username, full_name, aternos_session,"+
-			" max_servers, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"+
+			" created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)"+
 			" ON CONFLICT(user_id) DO UPDATE SET username = excluded.username,"+
 			" full_name = excluded.full_name, aternos_session = excluded.aternos_session,"+
 			" session_valid = 1, updated_at = excluded.updated_at",
-		userID, username, fullName, session, maxServers, now, now,
+		userID, username, fullName, session, now, now,
 	)
 	return err
 }
@@ -387,7 +387,10 @@ func scanOwners(rows *sql.Rows) ([]*Owner, error) {
 
 // GetOwner возвращает владельца или nil.
 func (d *DB) GetOwner(userID int64) (*Owner, error) {
-	row := d.db.QueryRow("SELECT * FROM owners WHERE user_id = ?", userID)
+	row := d.db.QueryRow(
+		"SELECT user_id, username, full_name, aternos_session, session_valid,"+
+			" max_servers, lockdown_mode, created_at, updated_at, pm_pinned_msg_id"+
+			" FROM owners WHERE user_id = ?", userID)
 	o, err := scanOwner(row)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -397,7 +400,10 @@ func (d *DB) GetOwner(userID int64) (*Owner, error) {
 
 // GetAllOwners возвращает всех владельцев.
 func (d *DB) GetAllOwners() ([]*Owner, error) {
-	rows, err := d.db.Query("SELECT * FROM owners ORDER BY created_at")
+	rows, err := d.db.Query(
+		"SELECT user_id, username, full_name, aternos_session, session_valid,"+
+			" max_servers, lockdown_mode, created_at, updated_at, pm_pinned_msg_id"+
+			" FROM owners ORDER BY created_at")
 	if err != nil {
 		return nil, err
 	}
@@ -515,27 +521,10 @@ func scanServers(rows *sql.Rows) ([]*Server, error) {
 	return out, rows.Err()
 }
 
-// AddServer добавляет сервер; при переполнении лимита возвращает nil, nil.
-func (d *DB) AddServer(ownerID int64, aternosID, serverIP, displayName string, maxServers *int) (int64, error) {
-	if maxServers == nil {
-		owner, err := d.GetOwner(ownerID)
-		if err != nil {
-			return 0, err
-		}
-		if owner == nil {
-			return 0, nil
-		}
-		m := owner.MaxServers
-		maxServers = &m
-	}
-	count, err := d.GetServersCount(ownerID)
-	if err != nil {
-		return 0, err
-	}
-	if count >= *maxServers {
-		return 0, nil
-	}
-	_, err = d.db.Exec(
+// AddServer добавляет сервер (без лимита — на Aternos может быть сколько
+// угодно серверов) и возвращает его id.
+func (d *DB) AddServer(ownerID int64, aternosID, serverIP, displayName string) (int64, error) {
+	_, err := d.db.Exec(
 		"INSERT OR IGNORE INTO servers (owner_id, aternos_id, server_ip, display_name, created_at)"+
 			" VALUES (?, ?, ?, ?, ?)",
 		ownerID, aternosID, serverIP, displayName, nowISO())
@@ -551,7 +540,9 @@ func (d *DB) AddServer(ownerID int64, aternosID, serverIP, displayName string, m
 
 // GetServer возвращает сервер по id.
 func (d *DB) GetServer(serverID int64) (*Server, error) {
-	row := d.db.QueryRow("SELECT * FROM servers WHERE id = ?", serverID)
+	row := d.db.QueryRow(
+		"SELECT id, owner_id, aternos_id, server_ip, display_name, is_active,"+
+			" auto_backup_h, auto_confirm, created_at FROM servers WHERE id = ?", serverID)
 	s, err := scanServer(row)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -561,7 +552,10 @@ func (d *DB) GetServer(serverID int64) (*Server, error) {
 
 // GetServerByAternosID возвращает сервер владельца по aternos_id.
 func (d *DB) GetServerByAternosID(ownerID int64, aternosID string) (*Server, error) {
-	row := d.db.QueryRow("SELECT * FROM servers WHERE owner_id = ? AND aternos_id = ?", ownerID, aternosID)
+	row := d.db.QueryRow(
+		"SELECT id, owner_id, aternos_id, server_ip, display_name, is_active,"+
+			" auto_backup_h, auto_confirm, created_at FROM servers"+
+			" WHERE owner_id = ? AND aternos_id = ?", ownerID, aternosID)
 	s, err := scanServer(row)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -571,7 +565,9 @@ func (d *DB) GetServerByAternosID(ownerID int64, aternosID string) (*Server, err
 
 // GetServersByOwner возвращает все серверы владельца.
 func (d *DB) GetServersByOwner(ownerID int64) ([]*Server, error) {
-	rows, err := d.db.Query("SELECT * FROM servers WHERE owner_id = ? ORDER BY id", ownerID)
+	rows, err := d.db.Query(
+		"SELECT id, owner_id, aternos_id, server_ip, display_name, is_active,"+
+			" auto_backup_h, auto_confirm, created_at FROM servers WHERE owner_id = ? ORDER BY id", ownerID)
 	if err != nil {
 		return nil, err
 	}
@@ -580,18 +576,14 @@ func (d *DB) GetServersByOwner(ownerID int64) ([]*Server, error) {
 
 // GetActiveServersByOwner возвращает активные серверы владельца.
 func (d *DB) GetActiveServersByOwner(ownerID int64) ([]*Server, error) {
-	rows, err := d.db.Query("SELECT * FROM servers WHERE owner_id = ? AND is_active = 1 ORDER BY id", ownerID)
+	rows, err := d.db.Query(
+		"SELECT id, owner_id, aternos_id, server_ip, display_name, is_active,"+
+			" auto_backup_h, auto_confirm, created_at FROM servers"+
+			" WHERE owner_id = ? AND is_active = 1 ORDER BY id", ownerID)
 	if err != nil {
 		return nil, err
 	}
 	return scanServers(rows)
-}
-
-// GetServersCount возвращает число серверов владельца.
-func (d *DB) GetServersCount(ownerID int64) (int, error) {
-	var n int
-	err := d.db.QueryRow("SELECT COUNT(*) FROM servers WHERE owner_id = ?", ownerID).Scan(&n)
-	return n, err
 }
 
 // SetServerActive включает/выключает сервер.
@@ -698,7 +690,9 @@ func (d *DB) AddChat(chatID, ownerID int64, title string) (bool, error) {
 
 // GetChat возвращает чат по id.
 func (d *DB) GetChat(chatID int64) (*Chat, error) {
-	row := d.db.QueryRow("SELECT * FROM chats WHERE chat_id = ?", chatID)
+	row := d.db.QueryRow(
+		"SELECT chat_id, owner_id, title, pinned_msg_id, is_active, created_at"+
+			" FROM chats WHERE chat_id = ?", chatID)
 	c, err := scanChat(row)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -709,7 +703,9 @@ func (d *DB) GetChat(chatID int64) (*Chat, error) {
 // GetChatOwner возвращает строку владельца привязанного чата (nil — чат не привязан).
 func (d *DB) GetChatOwner(chatID int64) (*Owner, error) {
 	row := d.db.QueryRow(
-		"SELECT o.* FROM chats c JOIN owners o ON o.user_id = c.owner_id WHERE c.chat_id = ?", chatID)
+		"SELECT o.user_id, o.username, o.full_name, o.aternos_session, o.session_valid,"+
+			" o.max_servers, o.lockdown_mode, o.created_at, o.updated_at, o.pm_pinned_msg_id"+
+			" FROM chats c JOIN owners o ON o.user_id = c.owner_id WHERE c.chat_id = ?", chatID)
 	o, err := scanOwner(row)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -729,7 +725,9 @@ func (d *DB) ChatExists(chatID int64) (bool, error) {
 
 // GetChatsByOwner возвращает активные чаты владельца.
 func (d *DB) GetChatsByOwner(ownerID int64) ([]*Chat, error) {
-	rows, err := d.db.Query("SELECT * FROM chats WHERE owner_id = ? AND is_active = 1 ORDER BY chat_id", ownerID)
+	rows, err := d.db.Query(
+		"SELECT chat_id, owner_id, title, pinned_msg_id, is_active, created_at"+
+			" FROM chats WHERE owner_id = ? AND is_active = 1 ORDER BY chat_id", ownerID)
 	if err != nil {
 		return nil, err
 	}
@@ -813,7 +811,9 @@ func (d *DB) GetChatServerIDs(chatID int64) ([]int64, error) {
 // GetChatServers возвращает активные серверы чата.
 func (d *DB) GetChatServers(chatID int64) ([]*Server, error) {
 	rows, err := d.db.Query(
-		"SELECT s.* FROM servers s JOIN chat_servers cs ON cs.server_id = s.id"+
+		"SELECT s.id, s.owner_id, s.aternos_id, s.server_ip, s.display_name,"+
+			" s.is_active, s.auto_backup_h, s.auto_confirm, s.created_at"+
+			" FROM servers s JOIN chat_servers cs ON cs.server_id = s.id"+
 			" WHERE cs.chat_id = ? AND s.is_active = 1 ORDER BY s.id", chatID)
 	if err != nil {
 		return nil, err
@@ -824,7 +824,8 @@ func (d *DB) GetChatServers(chatID int64) ([]*Server, error) {
 // GetChatsForServer возвращает активные чаты, где привязан сервер.
 func (d *DB) GetChatsForServer(serverID int64) ([]*Chat, error) {
 	rows, err := d.db.Query(
-		"SELECT c.* FROM chats c JOIN chat_servers cs ON cs.chat_id = c.chat_id"+
+		"SELECT c.chat_id, c.owner_id, c.title, c.pinned_msg_id, c.is_active, c.created_at"+
+			" FROM chats c JOIN chat_servers cs ON cs.chat_id = c.chat_id"+
 			" WHERE cs.server_id = ? AND c.is_active = 1", serverID)
 	if err != nil {
 		return nil, err
@@ -915,7 +916,8 @@ func (d *DB) GetChatUsersPaginated(chatID int64, limit, offset int) ([]*ChatUser
 		offset = 0
 	}
 	rows, err := d.db.Query(
-		"SELECT * FROM users WHERE chat_id = ?"+
+		"SELECT user_id, chat_id, username, full_name, has_access, created_at"+
+			" FROM users WHERE chat_id = ?"+
 			" ORDER BY has_access DESC, full_name COLLATE NOCASE, user_id LIMIT ? OFFSET ?",
 		chatID, limit, offset)
 	if err != nil {
@@ -955,7 +957,9 @@ func (d *DB) LogAction(ownerID int64, action, details string, userID, chatID, se
 
 // GetAuditLog возвращает последние записи журнала владельца.
 func (d *DB) GetAuditLog(ownerID int64, limit int) ([]*AuditEntry, error) {
-	rows, err := d.db.Query("SELECT * FROM audit_log WHERE owner_id = ? ORDER BY id DESC LIMIT ?", ownerID, limit)
+	rows, err := d.db.Query(
+		"SELECT id, owner_id, user_id, chat_id, server_id, action, details, created_at"+
+			" FROM audit_log WHERE owner_id = ? ORDER BY id DESC LIMIT ?", ownerID, limit)
 	if err != nil {
 		return nil, err
 	}

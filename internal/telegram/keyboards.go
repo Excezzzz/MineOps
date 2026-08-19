@@ -293,7 +293,7 @@ func runServerPickerKB(servers []*database.Server, chatID int64) *tele.ReplyMark
 // онбординг
 // ------------------------------------------------------------------ //
 
-func serverPickerKB(servers []aternos.ServerBrief, selected map[string]bool, maxServers int) *tele.ReplyMarkup {
+func serverPickerKB(servers []aternos.ServerBrief, selected map[string]bool) *tele.ReplyMarkup {
 	rows := make([][]tele.InlineButton, 0, len(servers)+1)
 	for _, s := range servers {
 		name := s.DisplayName
@@ -310,7 +310,7 @@ func serverPickerKB(servers []aternos.ServerBrief, selected map[string]bool, max
 		}})
 	}
 	rows = append(rows, []tele.InlineButton{{
-		Text: fmt.Sprintf("Готово (%d/%d)", len(selected), maxServers),
+		Text: fmt.Sprintf("Готово (%d)", len(selected)),
 		Data: cbData(cbOnboarding, "done", ""),
 	}})
 	return &tele.ReplyMarkup{InlineKeyboard: rows}
