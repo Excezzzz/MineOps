@@ -1,9 +1,4 @@
-// Package queuewatcher — наблюдатель очереди запуска Aternos (порт queue_watcher.py).
-//
-// После server.start() фоновая задача каждые 15 секунд опрашивает статус
-// панели и автоматически подтверждает запуск: по явному сигналу lang=="confirm"
-// и дополнительно «вслепую» каждые 45 секунд (confirm идемпотентен). Когда
-// сервер выходит онлайн — наблюдатель уведомляет чаты и завершается.
+// Package queuewatcher — background Aternos queue confirmer.
 package queuewatcher
 
 import (
@@ -32,7 +27,6 @@ const (
 	blindConfirmInterval = 45 * time.Second
 )
 
-// Watcher — реестр активных наблюдателей.
 type Watcher struct {
 	db       *database.DB
 	managers *aternos.Registry
@@ -42,7 +36,6 @@ type Watcher struct {
 	active map[int64]bool
 }
 
-// New создаёт Watcher.
 func New(db *database.DB, managers *aternos.Registry, dash *dashboard.Dashboard) *Watcher {
 	return &Watcher{
 		db:       db,
@@ -52,7 +45,6 @@ func New(db *database.DB, managers *aternos.Registry, dash *dashboard.Dashboard)
 	}
 }
 
-// IsWatching — идёт ли наблюдение за сервером.
 func (w *Watcher) IsWatching(serverID int64) bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -306,7 +298,6 @@ func (w *Watcher) refreshDashboard(b *tele.Bot, serverID int64) {
 	}
 }
 
-// ownerLang возвращает язык владельца по user_id.
 func (w *Watcher) ownerLang(ownerID int64) string {
 	if o, _ := w.db.GetOwner(ownerID); o != nil && o.Lang != "" {
 		return o.Lang
@@ -314,7 +305,6 @@ func (w *Watcher) ownerLang(ownerID int64) string {
 	return "ru"
 }
 
-// chatLang возвращает язык интерфейса чата (язык владельца чата).
 func (w *Watcher) chatLang(chatID int64) string {
 	if o, _ := w.db.GetChatOwner(chatID); o != nil && o.Lang != "" {
 		return o.Lang
@@ -322,8 +312,7 @@ func (w *Watcher) chatLang(chatID int64) string {
 	return "ru"
 }
 
-// notifyServerOnline шлёт во все привязанные чаты сервера временное
-// уведомление «сервер запущен» (удаляется через 60 секунд).
+// Временное уведомление, удаляется через 60 секунд.
 func (w *Watcher) notifyServerOnline(b *tele.Bot, serverID int64, status *aternos.ServerInfo) {
 	server, err := w.db.GetServer(serverID)
 	if err != nil || server == nil {

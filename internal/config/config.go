@@ -1,4 +1,4 @@
-// Package config загружает настройки бота из .env (godotenv).
+// Package config — loads bot settings from .env.
 package config
 
 import (
@@ -11,7 +11,6 @@ import (
 	"github.com/joho/godotenv"
 )
 
-// Config — типизированные настройки бота.
 type Config struct {
 	BotToken       string
 	SuperAdminID   int64
@@ -22,7 +21,7 @@ type Config struct {
 	SessionCheck   int
 }
 
-// Load читает .env рядом с исполняемым файлом/рабочей директорией и валидирует.
+// .env рядом с бинарником/рабочей директорией; валидирует обязательные поля.
 func Load() (*Config, error) {
 	_ = godotenv.Load(".env")
 

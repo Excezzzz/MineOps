@@ -1,5 +1,3 @@
-// Реестр per-owner менеджеров: общий HTTP-клиент (с перехватчиком ошибок
-// аутентификации) и кеш сессий на всё время жизни процесса.
 package aternos
 
 import (
@@ -9,7 +7,6 @@ import (
 	"mineops/internal/database"
 )
 
-// Registry — фабрика менеджеров по владельцам.
 type Registry struct {
 	db         *database.DB
 	httpClient *http.Client
@@ -19,8 +16,6 @@ type Registry struct {
 	authHook AuthFailureHook
 }
 
-// NewRegistry создаёт общий реестр. HTTP-клиент оборачивается перехватчиком
-// ошибок аутентификации Aternos.
 func NewRegistry(db *database.DB, httpClient *http.Client) *Registry {
 	r := &Registry{
 		db:      db,
@@ -36,8 +31,7 @@ func NewRegistry(db *database.DB, httpClient *http.Client) *Registry {
 	return r
 }
 
-// SetAuthHook задаёт перехватчик ошибок аутентификации (вызывается с id
-// владельца; потокобезопасно, может быть заменён после старта бота).
+// (потокобезопасно, может быть заменён после старта бота)
 func (r *Registry) SetAuthHook(hook AuthFailureHook) {
 	r.mu.Lock()
 	r.authHook = hook
@@ -53,7 +47,6 @@ func (r *Registry) notifyAuth(ownerID int64) {
 	}
 }
 
-// For возвращает (и при необходимости создаёт) менеджера владельца.
 func (r *Registry) For(ownerID int64) *Manager {
 	r.mu.Lock()
 	defer r.mu.Unlock()

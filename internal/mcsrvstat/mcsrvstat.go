@@ -1,8 +1,4 @@
-// Package mcsrvstat — публичный статус Minecraft-серверов (порт mcsrvstat.py).
-//
-// Порядок источников: REST mcsrvstat.us -> modern Server List Ping ->
-// legacy ping (0xFE 0x01). Никогда не бросает ошибок наружу:
-// недоступность источника = offline-статус.
+// Package mcsrvstat — Minecraft server status via API and protocol pings.
 package mcsrvstat
 
 import (
@@ -19,7 +15,6 @@ import (
 	"unicode/utf16"
 )
 
-// Status — стандартизированный статус сервера.
 type Status struct {
 	IP            string
 	IsOnline      bool
@@ -49,11 +44,8 @@ func emptyStatus(serverIP string) Status {
 	}
 }
 
-// GetServerStatus возвращает статус сервера по адресу (ip + опциональный порт).
-//
-// allowLegacy=false отключает legacy-пинг: прокси Aternos отвечает на нём даже
-// на оффлайн-серверах (фейковый «онлайн»), поэтому когда панель недоступна,
-// legacy использовать нельзя.
+// allowLegacy=false: прокси Aternos отвечает на legacy-пинг даже на
+// оффлайн-серверах (фейковый «онлайн»).
 func GetServerStatus(serverIP string, port int, allowLegacy bool) Status {
 	if serverIP == "" {
 		return emptyStatus("")
@@ -104,10 +96,6 @@ func GetServerStatus(serverIP string, port int, allowLegacy bool) Status {
 	return emptyStatus(serverIP)
 }
 
-// ------------------------------------------------------------------ //
-// REST API mcsrvstat.us
-// ------------------------------------------------------------------ //
-
 type mcsrvAPIResponse struct {
 	Online  bool   `json:"online"`
 	IP      string `json:"ip"`
@@ -153,7 +141,6 @@ func apiStatus(serverIP string) *Status {
 	}
 }
 
-// GetPlayersList возвращает ники игроков через mcstatus.io (пусто при ошибке).
 func GetPlayersList(serverIP string, port int) []string {
 	return getPlayersList(serverIP, port)
 }
@@ -192,10 +179,6 @@ func getPlayersList(serverIP string, port int) []string {
 	}
 	return names
 }
-
-// ------------------------------------------------------------------ //
-// modern Server List Ping (1.7+)
-// ------------------------------------------------------------------ //
 
 func modernSLP(host string, port int) *Status {
 	if port == 0 {
@@ -273,10 +256,6 @@ func modernSLP(host string, port int) *Status {
 		Version:       version,
 	}
 }
-
-// ------------------------------------------------------------------ //
-// legacy Server List Ping (0xFE 0x01)
-// ------------------------------------------------------------------ //
 
 func legacyPing(host string, port int) *Status {
 	if port == 0 {
@@ -361,11 +340,6 @@ func isAllDigits(s string) bool {
 	return true
 }
 
-// ------------------------------------------------------------------ //
-// вспомогательное
-// ------------------------------------------------------------------ //
-
-// varint кодирует число в протокольный формат Minecraft.
 func varint(v int) []byte {
 	var out []byte
 	for {
@@ -397,7 +371,6 @@ func readVarint(data []byte) (int, error) {
 	return 0, fmt.Errorf("varint не завершён")
 }
 
-// httpClient — тонкая обёртка net/http с таймаутом.
 type httpClient struct {
 	timeout time.Duration
 	client  *http.Client

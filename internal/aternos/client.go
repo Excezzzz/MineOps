@@ -1,16 +1,4 @@
-// Package aternos — минималистичный HTTP-клиент Aternos (Go-порт python-aternos 3.0.6).
-//
-// Реверс-инжиниринг протокола:
-//   - AJAX_TOKEN вычисляется JavaScript-кодом со страницы https://aternos.org/go/
-//     (функция `(() => {...})();` выполняется встроенным JS-движком goja с теми же
-//     стабами окружения, что js2py в Python-версии);
-//   - SEC генерируется клиентом: `ключ:значение` (11 символов [a-z0-9] + "00000")
-//     плюс кука ATERNOS_SEC_<ключ>=<значение>;
-//   - запросы к /ajax/server/<action> отправляются с куками ATERNOS_SESSION,
-//     ATERNOS_SEC_<ключ>, ATERNOS_SERVER=<servid> и параметрами TOKEN/SEC;
-//   - статус сервера берётся из JSON `var lastStatus = {...};` на странице /server;
-//   - список серверов — с /servers/ (div.server-body, атрибут data-id); редирект
-//     на /go/ означает, что кука истекла.
+// Package aternos — HTTP client for the Aternos control panel.
 package aternos
 
 import (
@@ -33,10 +21,6 @@ import (
 	"github.com/dop251/goja"
 )
 
-// ------------------------------------------------------------------ //
-// ошибки
-// ------------------------------------------------------------------ //
-
 const (
 	msgCloudflare = "⚠️ Aternos временно заблокировал запрос (Cloudflare). " +
 		"Подождите 3-5 минут или обновите куку /set_session."
@@ -47,14 +31,12 @@ const (
 	msgServerNotFound = "Сервер не найден или не принадлежит владельцу."
 )
 
-// Error — ошибка взаимодействия с Aternos.
 type Error struct {
 	Message string
 }
 
 func (e *Error) Error() string { return e.Message }
 
-// NewError создаёт AternosError с заданным сообщением.
 func NewError(message string) *Error { return &Error{Message: message} }
 
 func isCloudflare(err error) bool {
@@ -62,14 +44,12 @@ func isCloudflare(err error) bool {
 	return errors.As(err, &aerr) && strings.Contains(aerr.Message, "Cloudflare")
 }
 
-// ServerBrief — краткая информация о сервере аккаунта.
 type ServerBrief struct {
 	AternosID   string
 	ServerIP    string
 	DisplayName string
 }
 
-// ServerInfo — данные `lastStatus` с панели Aternos.
 type ServerInfo struct {
 	Status     int
 	Players    any
@@ -83,17 +63,8 @@ type ServerInfo struct {
 	IP         string
 }
 
-// ------------------------------------------------------------------ //
-// утилиты
-// ------------------------------------------------------------------ //
-
-// ------------------------------------------------------------------ //
-// токен: парсинг и выполнение JS
-// ------------------------------------------------------------------ //
-
 var arrowFnRe = regexp.MustCompile(`\(\(\).*?\)\(\);`)
 
-// extractTokenJS извлекает JavaScript-функцию из <head> страницы /go/.
 func extractTokenJS(page string) (string, error) {
 	head := page
 	if i := strings.Index(page, "<head>"); i >= 0 {
@@ -113,9 +84,6 @@ func extractTokenJS(page string) (string, error) {
 	return code, nil
 }
 
-// execTokenJS выполняет JS-функцию токена и возвращает AJAX_TOKEN.
-// Окружение повторяет стабы js2py из Python-версии, поэтому значение
-// совпадает с тем, что получает python-aternos.
 func execTokenJS(code string) (string, error) {
 	vm := goja.New()
 
@@ -161,7 +129,6 @@ func execTokenJS(code string) (string, error) {
 	return tokenVal.String(), nil
 }
 
-// fetchToken получает AJAX_TOKEN со страницы /go/.
 func fetchToken(ctx context.Context, httpClient *http.Client) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/go/", nil)
 	if err != nil {
@@ -190,12 +157,7 @@ func fetchToken(ctx context.Context, httpClient *http.Client) (string, error) {
 	return execTokenJS(code)
 }
 
-// errCloudflare сигнализирует о Cloudflare-блокировке (403).
 var errCloudflare = errors.New("cloudflare challenge")
-
-// ------------------------------------------------------------------ //
-// SEC
-// ------------------------------------------------------------------ //
 
 const secAlphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
 
@@ -215,10 +177,6 @@ func genSecPart() string {
 	return sb.String()
 }
 
-// ------------------------------------------------------------------ //
-// Session — транспорт для одного аккаунта
-// ------------------------------------------------------------------ //
-
 const (
 	baseURL   = "https://aternos.org"
 	requestUA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 " +
@@ -229,7 +187,6 @@ const (
 	loginRetryTO = 300 * time.Millisecond
 )
 
-// Session — состояние авторизации одного владельца.
 type Session struct {
 	httpClient *http.Client
 	SessionID  string    // ATERNOS_SESSION
@@ -335,7 +292,6 @@ func (s *Session) request(ctx context.Context, method, path string,
 	return nil, lastErr
 }
 
-// newSession логинится по куке: получает токен и генерирует SEC.
 func newSession(ctx context.Context, httpClient *http.Client, sessionCookie string) (*Session, error) {
 	token, err := fetchToken(ctx, httpClient)
 	if err != nil {
@@ -356,7 +312,6 @@ func newSession(ctx context.Context, httpClient *http.Client, sessionCookie stri
 	}, nil
 }
 
-// FetchServerInfo получает `lastStatus` сервера.
 func (s *Session) FetchServerInfo(ctx context.Context, servID string) (*ServerInfo, error) {
 	resp, err := s.request(ctx, http.MethodGet, "/server", nil,
 		map[string]string{"ATERNOS_SERVER": servID}, false)
@@ -391,8 +346,6 @@ func (s *Session) FetchServerInfo(ctx context.Context, servID string) (*ServerIn
 	return info, nil
 }
 
-// ListServers возвращает серверы аккаунта ({aternos_id, server_ip, display_name}).
-// У каждого сервера уточняется ip/имя через FetchServerInfo (best-effort).
 func (s *Session) ListServers(ctx context.Context) ([]ServerBrief, error) {
 	resp, err := s.request(ctx, http.MethodGet, "/servers/", nil, nil, false)
 	if err != nil {
@@ -411,8 +364,7 @@ func (s *Session) ListServers(ctx context.Context) ([]ServerBrief, error) {
 			brief.ServerIP = info.IP
 			brief.DisplayName = util.FirstNonEmpty(info.Name, info.IP, id)
 			if brief.ServerIP == "" {
-				// IP не отдан панелью — собираем адрес из id сервера
-				// (как _get_server_address в python-aternos).
+				// IP не отдан панелью — собираем адрес из id сервера.
 				brief.ServerIP = id + ".aternos.me"
 			}
 		}
@@ -438,8 +390,6 @@ func parseServerIDs(html string) []string {
 	return ids
 }
 
-// actionServer выполняет ajax-действие над сервером (start/stop/confirm/...).
-// Метод POST с данными в теле — как в python-aternos (_urlopen с data).
 func (s *Session) actionServer(ctx context.Context, action string, servID string, extra url.Values) (map[string]any, error) {
 	resp, err := s.request(ctx, http.MethodPost, "/ajax/server/"+action, extra,
 		map[string]string{"ATERNOS_SERVER": servID}, true)
@@ -515,13 +465,11 @@ func serverStartReason(reason string) string {
 	return fmt.Sprintf("Unable to start server, code: %s", reason)
 }
 
-// Stop останавливает сервер.
 func (s *Session) Stop(ctx context.Context, servID string) error {
 	_, err := s.actionServer(ctx, "stop", servID, nil)
 	return err
 }
 
-// Confirm подтверждает запуск сервера из очереди.
 func (s *Session) Confirm(ctx context.Context, servID string) error {
 	_, err := s.actionServer(ctx, "confirm", servID, nil)
 	return err

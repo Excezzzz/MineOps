@@ -1,5 +1,3 @@
-// Менеджер Aternos: per-owner кеш сессий, сериализация запросов,
-// cooldown при Cloudflare-бане (порт AternosManager из aternos_api.py).
 package aternos
 
 import (
@@ -16,7 +14,6 @@ import (
 	"mineops/internal/i18n"
 )
 
-// Manager — фасад работы с Aternos для одного владельца.
 type Manager struct {
 	ownerID int64
 	db      *database.DB
@@ -34,7 +31,7 @@ const (
 	cfCooldown = 5 * time.Minute  // пауза после Cloudflare-бана
 )
 
-// NewManager создаёт менеджер для владельца (общий http.Client разделяется).
+// (общий http.Client разделяется)
 func NewManager(ownerID int64, db *database.DB, httpClient *http.Client) *Manager {
 	return &Manager{
 		ownerID:    ownerID,
@@ -57,7 +54,6 @@ func (m *Manager) lockFor(ownerID int64) *sync.Mutex {
 	return mu
 }
 
-// lang возвращает язык интерфейса владельца (для локализации ошибок/текстов).
 func (m *Manager) lang() string {
 	if o, _ := m.db.GetOwner(m.ownerID); o != nil && o.Lang != "" {
 		return o.Lang
@@ -65,9 +61,7 @@ func (m *Manager) lang() string {
 	return "ru"
 }
 
-// localize переводит текст ошибки Aternos на язык владельца. Сопоставление —
-// по известным константам сообщений (равенство или вхождение в обёрнутый
-// текст). Неизвестные ошибки возвращаются как есть.
+// Сопоставление — по известным константам сообщений (равенство или вхождение); неизвестные — как есть.
 func (m *Manager) localize(err error) error {
 	if err == nil {
 		return nil
@@ -92,7 +86,6 @@ func (m *Manager) localize(err error) error {
 	return err
 }
 
-// cookie возвращает расшифрованную куку владельца.
 func (m *Manager) cookie() (string, error) {
 	owner, err := m.db.GetOwner(m.ownerID)
 	if err != nil {
@@ -108,7 +101,6 @@ func (m *Manager) cookie() (string, error) {
 	return cookie, nil
 }
 
-// getSession возвращает закешированную сессию или логинится заново.
 func (m *Manager) getSession(ctx context.Context, ownerID int64, cookie string) (*Session, error) {
 	m.mu.Lock()
 	cached := m.cache[ownerID]
@@ -183,7 +175,7 @@ func cookieFrom(ctx context.Context) string {
 	return ""
 }
 
-// CheckSession проверяет куку владельца из БД (без сетевых запросов, пока кеш свежий).
+// (без сетевых запросов, пока кеш свежий)
 func (m *Manager) CheckSession(ctx context.Context) error {
 	return m.run(ctx, func(ctx context.Context) error {
 		_, err := m.getSession(ctx, m.ownerID, cookieFrom(ctx))
@@ -191,7 +183,6 @@ func (m *Manager) CheckSession(ctx context.Context) error {
 	})
 }
 
-// ListAccountServers возвращает серверы аккаунта владельца (для панели).
 func (m *Manager) ListAccountServers(ctx context.Context) ([]ServerBrief, error) {
 	var out []ServerBrief
 	err := m.run(ctx, func(ctx context.Context) error {
@@ -205,7 +196,6 @@ func (m *Manager) ListAccountServers(ctx context.Context) ([]ServerBrief, error)
 	return out, err
 }
 
-// StartServer запускает сервер владельца по его id в БД.
 func (m *Manager) StartServer(ctx context.Context, serverID int64) (string, error) {
 	server, err := m.db.GetServer(serverID)
 	if err != nil {
@@ -228,7 +218,6 @@ func (m *Manager) StartServer(ctx context.Context, serverID int64) (string, erro
 	return i18n.T(m.lang(), "srv_start_requested", html.EscapeString(server.DisplayName)), nil
 }
 
-// StopServer останавливает сервер владельца.
 func (m *Manager) StopServer(ctx context.Context, serverID int64) (string, error) {
 	server, err := m.db.GetServer(serverID)
 	if err != nil {
@@ -251,7 +240,6 @@ func (m *Manager) StopServer(ctx context.Context, serverID int64) (string, error
 	return fmt.Sprintf("Остановка сервера %s запрошена.", html.EscapeString(server.DisplayName)), nil
 }
 
-// ConfirmServer подтверждает запуск сервера из очереди.
 func (m *Manager) ConfirmServer(ctx context.Context, serverID int64) error {
 	server, err := m.db.GetServer(serverID)
 	if err != nil {
@@ -274,7 +262,7 @@ func (m *Manager) ConfirmServer(ctx context.Context, serverID int64) error {
 	return nil
 }
 
-// FetchInfo возвращает `lastStatus` сервера (для queue_watcher и панели).
+// (для watcher и панели)
 func (m *Manager) FetchInfo(ctx context.Context, serverID int64) (*ServerInfo, error) {
 	server, err := m.db.GetServer(serverID)
 	if err != nil {
@@ -295,7 +283,6 @@ func (m *Manager) FetchInfo(ctx context.Context, serverID int64) (*ServerInfo, e
 	return out, err
 }
 
-// ProbeCookie проверяет куку (вход + токен), не сохраняя её.
 func (m *Manager) ProbeCookie(ctx context.Context, cookie string) error {
 	mu := m.lockFor(m.ownerID)
 	mu.Lock()
@@ -313,7 +300,6 @@ func (m *Manager) ProbeCookie(ctx context.Context, cookie string) error {
 	return nil
 }
 
-// ProbeSession проверяет куку и возвращает серверы аккаунта (онбординг).
 func (m *Manager) ProbeSession(ctx context.Context, cookie string) ([]ServerBrief, error) {
 	mu := m.lockFor(m.ownerID)
 	mu.Lock()
@@ -347,7 +333,6 @@ func isExpiredRedirect(err error) bool {
 	return asError(err, &aerr) && aerr.Message == msgSessionExpired
 }
 
-// UpdateSession обновляет куку владельца: проверяет, шифрует, сохраняет, чистит кеш.
 func (m *Manager) UpdateSession(ctx context.Context, newCookie string) error {
 	cookie := newCookie
 	if cookie == "" {

@@ -14,10 +14,6 @@ import (
 	"mineops/internal/i18n"
 )
 
-// ------------------------------------------------------------------ //
-// /ping — проверка задержки (ЛС / группа, в группе — автоудаление)
-// ------------------------------------------------------------------ //
-
 func (bot *Bot) cmdPing(c tele.Context) error {
 	return bot.SafeCall(func() error {
 		m := c.Message()
@@ -35,10 +31,6 @@ func (bot *Bot) cmdPing(c tele.Context) error {
 		return err
 	})
 }
-
-// ------------------------------------------------------------------ //
-// /info — карточка сервера (ЛС / группа, в группе — автоудаление)
-// ------------------------------------------------------------------ //
 
 func (bot *Bot) cmdInfo(c tele.Context) error {
 	return bot.SafeCall(func() error {
@@ -117,10 +109,6 @@ func (bot *Bot) cmdInfo(c tele.Context) error {
 	})
 }
 
-// ------------------------------------------------------------------ //
-// /stats — статистика запусков из audit_log (только ЛС)
-// ------------------------------------------------------------------ //
-
 func (bot *Bot) cmdStats(c tele.Context) error {
 	return bot.SafeCall(func() error {
 		m := c.Message()
@@ -162,8 +150,7 @@ func (bot *Bot) cmdStats(c tele.Context) error {
 	})
 }
 
-// timeAgo — человекочитаемое «сколько времени прошло»: «только что»,
-// «5м назад», «2ч назад», «вчера», «3д назад».
+// Форматы: «только что», «5м», «2ч», «вчера», «3д».
 func timeAgo(ts string, lang string) string {
 	t, err := time.Parse("2006-01-02T15:04:05", ts)
 	if err != nil {
@@ -183,10 +170,6 @@ func timeAgo(ts string, lang string) string {
 		return i18n.T(lang, "time_ago_days", int(diff.Hours()/24))
 	}
 }
-
-// ------------------------------------------------------------------ //
-// /schedule — расписание автозапуска (только ЛС)
-// ------------------------------------------------------------------ //
 
 func (bot *Bot) cmdSchedule(c tele.Context) error {
 	return bot.SafeCall(func() error {
@@ -234,13 +217,7 @@ func (bot *Bot) cmdSchedule(c tele.Context) error {
 	})
 }
 
-// ------------------------------------------------------------------ //
-// плановый автозапуск (вызывается из планировщика каждые 30 секунд)
-// ------------------------------------------------------------------ //
-
-// CheckSchedule запускает серверы владельцев, у которых наступило время
-// schedule_time (HH:MM). Однократное расписание сбрасывается после запуска.
-// Защита от повторного запуска в течение одних суток — в памяти бота.
+// Однократное расписание сбрасывается после запуска; защита от повтора в течение суток — в памяти бота.
 func (bot *Bot) CheckSchedule() {
 	owners, err := bot.db.GetScheduledOwners()
 	if err != nil {
@@ -304,13 +281,8 @@ func (bot *Bot) fireSchedule(o *database.Owner) {
 	}
 }
 
-// ------------------------------------------------------------------ //
-// определение языка
-// ------------------------------------------------------------------ //
-
-// uiLang возвращает язык интерфейса для контекста: для ЛС — язык владельца
-// (или отправителя), для группы — язык владельца чата. Фолбэк — детект по
-// LanguageCode отправителя.
+// Для ЛС — язык владельца (или отправителя), для группы — язык владельца
+// чата; фолбэк — детект по LanguageCode.
 func (bot *Bot) uiLang(c tele.Context) string {
 	if c == nil {
 		return "ru"
@@ -343,7 +315,6 @@ func (bot *Bot) uiLang(c tele.Context) string {
 	return lang
 }
 
-// ownerLang возвращает язык владельца по user_id.
 func (bot *Bot) ownerLang(uid int64) string {
 	if o, _ := bot.db.GetOwner(uid); o != nil && o.Lang != "" {
 		return o.Lang
@@ -351,12 +322,10 @@ func (bot *Bot) ownerLang(uid int64) string {
 	return "ru"
 }
 
-// userLang возвращает язык пользователя (для личных уведомлений).
 func (bot *Bot) userLang(uid int64) string {
 	return bot.ownerLang(uid)
 }
 
-// lockdownMsg — локализованное сообщение о локдауне.
 func (bot *Bot) lockdownMsg(c tele.Context) string {
 	return i18n.T(bot.uiLang(c), "lockdown_blocked")
 }

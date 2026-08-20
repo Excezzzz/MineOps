@@ -14,8 +14,7 @@ import (
 	"mineops/internal/i18n"
 )
 
-// Префиксы callback-данных (формат aiogram: "prefix:field1:field2",
-// bool-поля кодируются как "True"/"False" — совместимо со старыми кнопками).
+// Префиксы callback-данных: "prefix:field1:field2", bool-поля — "True"/"False".
 const (
 	cbPanel       = "panel"   // panel:<action>
 	cbPanelServer = "psrv"    // psrv:<server_id>
@@ -48,10 +47,6 @@ func btnName(name string) string {
 	}
 	return string(r[:maxLen-1]) + "…"
 }
-
-// ------------------------------------------------------------------ //
-// панель владельца
-// ------------------------------------------------------------------ //
 
 func ownerPanelKB(lang string) *tele.ReplyMarkup {
 	rows := [][]tele.InlineButton{
@@ -218,17 +213,12 @@ func deleteAccountKB(lang string) *tele.ReplyMarkup {
 	}}
 }
 
-// ------------------------------------------------------------------ //
-// групповой дашборд
-// ------------------------------------------------------------------ //
-
-// DashboardKB — фабрика клавиатуры дашборда (инжектится в dashboard.New).
+// (инжектится в dashboard.New)
 func DashboardKB(servers []dashboard.DashServer, chatID int64, lang string) *tele.ReplyMarkup {
 	return dashboardKB(servers, chatID, lang)
 }
 
-// dashboardKB — кнопки дашборда: по строке действий на сервер + обновление/доступ.
-// «✅ Подтвердить» появляется ТОЛЬКО в статусе is_starting (сервер в очереди).
+// «✅ Подтвердить» — только при is_starting (сервер в очереди).
 func dashboardKB(servers []dashboard.DashServer, chatID int64, lang string) *tele.ReplyMarkup {
 	rows := make([][]tele.InlineButton, 0, len(servers)+1)
 	for _, s := range servers {
@@ -271,7 +261,7 @@ func approveAccessKB(userID, chatID int64, lang string) *tele.ReplyMarkup {
 	}}
 }
 
-// runServerPickerKB — выбор сервера для запуска через /run (несколько серверов).
+// Для /run в группе с несколькими серверами.
 func runServerPickerKB(servers []*database.Server, chatID int64, lang string) *tele.ReplyMarkup {
 	rows := make([][]tele.InlineButton, 0, len(servers)+1)
 	for _, s := range servers {
@@ -287,13 +277,9 @@ func runServerPickerKB(servers []*database.Server, chatID int64, lang string) *t
 	return &tele.ReplyMarkup{InlineKeyboard: rows}
 }
 
-// ------------------------------------------------------------------ //
-// онбординг
-// ------------------------------------------------------------------ //
-
 const onbPageSize = 8
 
-// serverPickerKB — чекбоксы выбора серверов с пагинацией (по 8 на страницу).
+// Чекбоксы выбора серверов, по 8 на страницу.
 func serverPickerKB(servers []aternos.ServerBrief, selected map[string]bool, page int, lang string) *tele.ReplyMarkup {
 	total := len(servers)
 	pages := (total + onbPageSize - 1) / onbPageSize
@@ -352,11 +338,6 @@ func serverPickerKB(servers []aternos.ServerBrief, selected map[string]bool, pag
 	return &tele.ReplyMarkup{InlineKeyboard: rows}
 }
 
-// ------------------------------------------------------------------ //
-// парсинг callback-данных
-// ------------------------------------------------------------------ //
-
-// splitCb разбивает "prefix:a:b" на [prefix, a, b].
 func splitCb(data string) []string {
 	return strings.Split(data, ":")
 }
@@ -378,7 +359,7 @@ func cbStr(parts []string, idx int) string {
 
 func boolStr(b bool) string {
 	if b {
-		return "True" // aiogram-стиль: совместимость со старыми кнопками
+		return "True"
 	}
 	return "False"
 }

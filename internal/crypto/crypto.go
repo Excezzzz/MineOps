@@ -1,8 +1,4 @@
-// Package crypto шифрует куки Aternos (Fernet-совместимо с Python cryptography).
-//
-// Ключ берётся из ENCRYPTION_KEY в .env (если задан), иначе читается/создаётся
-// файл data/secret.key — ровно как в Python-версии, поэтому существующие
-// зашифрованные куки в БД расшифровываются без потери данных.
+// Package crypto — Fernet encryption for Aternos cookies.
 package crypto
 
 import (
@@ -20,7 +16,6 @@ var (
 	keys    []*fernet.Key
 )
 
-// Init загружает (или генерирует) ключ шифрования.
 func Init(encryptionKey string) error {
 	envKey := encryptionKey
 	if envKey != "" {
@@ -58,7 +53,7 @@ func Init(encryptionKey string) error {
 	return nil
 }
 
-// EncryptSession шифрует куку Aternos (пустая строка остаётся пустой).
+// Пустая строка остаётся пустой.
 func EncryptSession(plain string) string {
 	if plain == "" {
 		return ""
@@ -70,7 +65,7 @@ func EncryptSession(plain string) string {
 	return string(tok)
 }
 
-// DecryptSession расшифровывает куку; повреждённые данные дают пустую строку.
+// Повреждённые данные дают пустую строку.
 func DecryptSession(encrypted string) string {
 	if encrypted == "" {
 		return ""

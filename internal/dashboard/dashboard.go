@@ -1,8 +1,4 @@
-// Package dashboard — живой дашборд статусов (порт services/dashboard.py).
-//
-// Каждые 30 секунд опрашиваются статусы серверов владельцев и обновляется
-// ЕДИНЫЙ закреплённый дашборд в каждом привязанном чате. Если сообщение
-// удалено или закрепа ещё нет — дашборд отправляется и закрепляется заново.
+// Package dashboard — live server status dashboard.
 package dashboard
 
 import (
@@ -26,7 +22,6 @@ import (
 	"mineops/internal/util"
 )
 
-// DashServer — сервер со статусом (для рендера дашборда).
 type DashServer struct {
 	ID            int64
 	DisplayName   string
@@ -44,7 +39,6 @@ type DashServer struct {
 // чтобы избежать циклического импорта).
 type KBFactory func(servers []DashServer, chatID int64, lang string) *tele.ReplyMarkup
 
-// Dashboard — состояние дашбордов и кешей статусов.
 type Dashboard struct {
 	db       *database.DB
 	managers *aternos.Registry
@@ -73,7 +67,6 @@ const (
 	playersLimit = 20
 )
 
-// New создаёт Dashboard. kb — фабрика клавиатуры дашборда.
 func New(db *database.DB, managers *aternos.Registry, kb KBFactory) *Dashboard {
 	return &Dashboard{
 		db:             db,
@@ -90,7 +83,6 @@ func New(db *database.DB, managers *aternos.Registry, kb KBFactory) *Dashboard {
 	}
 }
 
-// chatLang возвращает язык интерфейса для чата (язык владельца чата).
 func (d *Dashboard) chatLang(chatID int64) string {
 	if o, _ := d.db.GetChatOwner(chatID); o != nil && o.Lang != "" {
 		return o.Lang
@@ -98,7 +90,6 @@ func (d *Dashboard) chatLang(chatID int64) string {
 	return "ru"
 }
 
-// ownerLang возвращает язык владельца по user_id.
 func (d *Dashboard) ownerLang(ownerID int64) string {
 	if o, _ := d.db.GetOwner(ownerID); o != nil && o.Lang != "" {
 		return o.Lang
@@ -106,39 +97,30 @@ func (d *Dashboard) ownerLang(ownerID int64) string {
 	return "ru"
 }
 
-// ------------------------------------------------------------------ //
-// состояние запуска / очереди
-// ------------------------------------------------------------------ //
-
-// MarkAsStarting помечает серверы как запускающиеся на `seconds` секунд.
 func (d *Dashboard) MarkAsStarting(seconds int) {
 	d.mu.Lock()
 	d.startingUntil = time.Now().Add(time.Duration(seconds) * time.Second)
 	d.mu.Unlock()
 }
 
-// ClearStarting сбрасывает пометку «запускается».
 func (d *Dashboard) ClearStarting() {
 	d.mu.Lock()
 	d.startingUntil = time.Time{}
 	d.mu.Unlock()
 }
 
-// IsStarting — True, если серверы ещё в состоянии «запускается».
 func (d *Dashboard) IsStarting() bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return time.Now().Before(d.startingUntil)
 }
 
-// SetQueuePosition запоминает позицию сервера в очереди запуска.
 func (d *Dashboard) SetQueuePosition(serverID int64, position int) {
 	d.mu.Lock()
 	d.queuePositions[serverID] = position
 	d.mu.Unlock()
 }
 
-// ClearQueuePosition убирает позицию очереди.
 func (d *Dashboard) ClearQueuePosition(serverID int64) {
 	d.mu.Lock()
 	delete(d.queuePositions, serverID)
@@ -151,11 +133,6 @@ func (d *Dashboard) queuePosition(serverID int64) int {
 	return d.queuePositions[serverID]
 }
 
-// ------------------------------------------------------------------ //
-// рендер
-// ------------------------------------------------------------------ //
-
-// FormatDashboardText формирует единый дашборд (HTML).
 func (d *Dashboard) FormatDashboardText(servers []DashServer, lang string) string {
 	if len(servers) == 0 {
 		return i18n.T(lang, "dash_no_servers", nowLabel(lang))
@@ -224,10 +201,6 @@ func nowLabel(lang string) string {
 	}
 	return i18n.T(lang, "dash_timestamp", time.Now().In(loc).Format("15:04:05"), label)
 }
-
-// ------------------------------------------------------------------ //
-// панель Aternos (авторитетный источник)
-// ------------------------------------------------------------------ //
 
 func (d *Dashboard) ensureServerPort(ctx context.Context, ownerID, serverID int64) int {
 	port, err := d.db.GetServerPort(serverID)
@@ -304,8 +277,7 @@ func panelToStatus(server *database.Server, panel *aternos.ServerInfo) DashServe
 	}
 }
 
-// startingState — сервер в процессе запуска (запускается или стоит в очереди),
-// когда пользователю нужна кнопка «Подтвердить».
+// Нужна кнопка «Подтвердить»: сервер запускается или стоит в очереди.
 func (d *Dashboard) startingState(serverID int64, online bool) bool {
 	if online {
 		return false
@@ -335,10 +307,6 @@ func (d *Dashboard) GetAuthoritativeStatus(ctx context.Context, ownerID int64, s
 		Starting:      d.startingState(server.ID, status.IsOnline),
 	}
 }
-
-// ------------------------------------------------------------------ //
-// закрепление
-// ------------------------------------------------------------------ //
 
 func (d *Dashboard) tryPin(b *tele.Bot, chatID int64, msg *tele.Message) bool {
 	if err := b.Pin(msg, tele.Silent); err != nil {
@@ -422,10 +390,6 @@ func (d *Dashboard) pinState(chatID int64, pending bool) {
 	d.mu.Unlock()
 }
 
-// ------------------------------------------------------------------ //
-// обновление дашбордов
-// ------------------------------------------------------------------ //
-
 func (d *Dashboard) updateChatDashboard(ctx context.Context, b *tele.Bot, chatID int64) {
 	servers, err := d.db.GetChatServers(chatID)
 	if err != nil || len(servers) == 0 {
@@ -498,7 +462,6 @@ func (d *Dashboard) updateOwnerPMDashboard(ctx context.Context, b *tele.Bot, own
 	}
 }
 
-// UpdateDashboards обновляет дашборды всех владельцев в их привязанных чатах.
 func (d *Dashboard) UpdateDashboards(ctx context.Context, b *tele.Bot) {
 	owners, err := d.db.GetAllOwners()
 	if err != nil {
@@ -563,8 +526,7 @@ func (d *Dashboard) UpdateDashboards(ctx context.Context, b *tele.Bot) {
 	}
 }
 
-// notifyServerOffline шлёт во все привязанные чаты сервера временное
-// уведомление «сервер ушёл в оффлайн» (удаляется через 60 секунд).
+// Временное уведомление, удаляется через 60 секунд.
 func (d *Dashboard) notifyServerOffline(b *tele.Bot, s *database.Server) {
 	name := s.DisplayName
 	if name == "" {
@@ -671,7 +633,6 @@ func (d *Dashboard) notifyPlayers(b *tele.Bot, s *database.Server, current []str
 	}
 }
 
-// joinNames экранирует и склеивает имена игроков через запятую.
 func joinNames(names []string) string {
 	escaped := make([]string, 0, len(names))
 	for _, n := range names {
@@ -680,18 +641,12 @@ func joinNames(names []string) string {
 	return strings.Join(escaped, ", ")
 }
 
-// UpdateChatsDashboards обновляет дашборды в конкретных чатах.
 func (d *Dashboard) UpdateChatsDashboards(ctx context.Context, b *tele.Bot, chatIDs []int64) {
 	for _, chatID := range chatIDs {
 		d.updateChatDashboard(ctx, b, chatID)
 	}
 }
 
-// ------------------------------------------------------------------ //
-// проверка сессий
-// ------------------------------------------------------------------ //
-
-// CheckAllSessions проверяет куки всех владельцев; при просрочке шлёт в ЛС.
 func (d *Dashboard) CheckAllSessions(ctx context.Context, b *tele.Bot) {
 	owners, err := d.db.GetAllOwners()
 	if err != nil {
@@ -734,7 +689,7 @@ func isCloudflareError(err error) bool {
 	return strings.Contains(err.Error(), "Cloudflare")
 }
 
-// BroadcastMessage рассылает текст в чаты (ошибки отдельных чатов не фатальны).
+// Ошибки отдельных чатов не фатальны.
 func (d *Dashboard) BroadcastMessage(b *tele.Bot, chatIDs []int64, text string) {
 	for _, chatID := range chatIDs {
 		_, err := b.Send(&tele.Chat{ID: chatID}, text)
@@ -744,7 +699,6 @@ func (d *Dashboard) BroadcastMessage(b *tele.Bot, chatIDs []int64, text string) 
 	}
 }
 
-// SortedChatIDs сортирует id чатов (детерминированный порядок обновления).
 func SortedChatIDs(ids []int64) []int64 {
 	out := append([]int64(nil), ids...)
 	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })

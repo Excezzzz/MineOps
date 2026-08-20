@@ -10,7 +10,6 @@ const (
 	fsmAdminWaitCookie  = "admin:waiting_cookie"
 )
 
-// FSM — простой in-memory конечный автомат состояний пользователей.
 type FSM struct {
 	mu     sync.Mutex
 	states map[int64]string

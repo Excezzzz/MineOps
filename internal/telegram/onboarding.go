@@ -14,7 +14,6 @@ import (
 	"mineops/internal/i18n"
 )
 
-// startOnboarding — начало онбординга (вызывается из /start).
 func (bot *Bot) startOnboarding(c tele.Context) {
 	m := c.Message()
 	if m == nil || m.Sender == nil {
@@ -27,7 +26,6 @@ func (bot *Bot) startOnboarding(c tele.Context) {
 	_, _ = bot.b.Send(m.Chat, i18n.T(lang, "onb_welcome"))
 }
 
-// onSessionCookie — принимает куку в состоянии waiting_cookie.
 func (bot *Bot) onSessionCookie(c tele.Context) {
 	m := c.Message()
 	if m == nil || m.Sender == nil {
@@ -66,7 +64,6 @@ func (bot *Bot) onSessionCookie(c tele.Context) {
 		serverPickerKB(servers, map[string]bool{}, 0, lang))
 }
 
-// cbOnboarding — чекбоксы выбора серверов, пагинация и кнопка «Готово».
 func (bot *Bot) cbOnboarding(c tele.Context, parts []string) error {
 	cb := c.Callback()
 	if cb == nil || cb.Message == nil || cb.Sender == nil {

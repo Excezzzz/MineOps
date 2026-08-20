@@ -1,6 +1,3 @@
-// Перехватчик HTTP-запросов к Aternos: если Aternos отвечает ошибкой
-// аутентификации (Cloudflare 403, 401, 403 или редирект на /go/), вызывает
-// hook с id владельца, чей запрос не прошёл. Бот затем уведомляет Владельца.
 package aternos
 
 import (
@@ -9,14 +6,12 @@ import (
 	"strings"
 )
 
-// AuthFailureHook вызывается при обнаружении ошибки аутентификации Aternos.
 type AuthFailureHook func(ownerID int64)
 
 type ownerCtxKey int
 
 const ownerKey ownerCtxKey = 1
 
-// ctxWithOwner кладёт id владельца в контекст запроса (для перехватчика).
 func ctxWithOwner(ctx context.Context, ownerID int64) context.Context {
 	return context.WithValue(ctx, ownerKey, ownerID)
 }
@@ -26,7 +21,6 @@ func ownerFrom(ctx context.Context) (int64, bool) {
 	return v, ok
 }
 
-// authInterceptor — RoundTripper, оборачивающий HTTP-запросы к Aternos.
 type authInterceptor struct {
 	base   http.RoundTripper
 	notify AuthFailureHook
@@ -57,7 +51,6 @@ func isAuthFailure(resp *http.Response) bool {
 	return false
 }
 
-// effectiveTransport возвращает транспорт для обёртки (клонирует дефолтный).
 func effectiveTransport(t http.RoundTripper) http.RoundTripper {
 	if t != nil {
 		return t

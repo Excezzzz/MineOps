@@ -1,4 +1,4 @@
-// Package util — общие вспомогательные функции.
+// Package util — shared helper functions.
 package util
 
 import (
@@ -6,7 +6,7 @@ import (
 	"fmt"
 )
 
-// ToInt конвертирует any-значение (JSON-дерево) в int; 0 при неудаче.
+// any из JSON-дерева → int; 0 при неудаче.
 func ToInt(v any) int {
 	switch t := v.(type) {
 	case int:
@@ -26,7 +26,7 @@ func ToInt(v any) int {
 	return 0
 }
 
-// ToStr конвертирует any-значение в string; "" при неудаче.
+// any → string; "" при неудаче.
 func ToStr(v any) string {
 	if s, ok := v.(string); ok {
 		return s
@@ -34,7 +34,6 @@ func ToStr(v any) string {
 	return ""
 }
 
-// ToStrList конвертирует any-массив в []string (строковые элементы).
 func ToStrList(v any) []string {
 	arr, ok := v.([]any)
 	if !ok {
@@ -49,7 +48,6 @@ func ToStrList(v any) []string {
 	return out
 }
 
-// FirstNonEmpty возвращает первую непустую строку из переданных.
 func FirstNonEmpty(vals ...string) string {
 	for _, v := range vals {
 		if v != "" {

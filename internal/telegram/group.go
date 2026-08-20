@@ -16,10 +16,6 @@ import (
 	"mineops/internal/i18n"
 )
 
-// ------------------------------------------------------------------ //
-// /link, /unlink, /status, /help (группы)
-// ------------------------------------------------------------------ //
-
 func (bot *Bot) isGroup(c tele.Context) bool {
 	if c.Message() == nil || c.Message().Chat == nil {
 		return false
@@ -240,7 +236,6 @@ func (bot *Bot) cmdRun(c tele.Context) error {
 	})
 }
 
-// cmdPlayers — список игроков онлайн (ЛС / группа, в группе — автоудаление).
 func (bot *Bot) cmdPlayers(c tele.Context) error {
 	return bot.SafeCall(func() error {
 		m := c.Message()
@@ -309,7 +304,6 @@ func (bot *Bot) cmdPlayers(c tele.Context) error {
 	})
 }
 
-// cmdGrant / cmdRevoke — выдача/отзыв доступа в группе (только владелец чата).
 func (bot *Bot) cmdGrant(c tele.Context) error {
 	return bot.SafeCall(func() error {
 		return bot.setAccessCmd(c, true)
@@ -392,7 +386,6 @@ func (bot *Bot) setAccessCmd(c tele.Context, grant bool) error {
 	return err
 }
 
-// cmdConfirm — ручное подтверждение очереди запуска Aternos (ЛС / группа).
 func (bot *Bot) cmdConfirm(c tele.Context) error {
 	return bot.SafeCall(func() error {
 		m := c.Message()
@@ -474,7 +467,6 @@ func (bot *Bot) cmdConfirm(c tele.Context) error {
 	})
 }
 
-// cbRunServer — выбор сервера для /run: запускает конкретный сервер в чате.
 func (bot *Bot) cbRunServer(c tele.Context, parts []string) error {
 	cb := c.Callback()
 	if cb == nil || cb.Message == nil || cb.Sender == nil {
@@ -553,7 +545,6 @@ func (bot *Bot) canManage(uid, chatID int64) bool {
 	return ok
 }
 
-// toast — короткое всплывающее сообщение, которое само удаляется.
 func (bot *Bot) toast(c tele.Context, text string, seconds int) {
 	m := c.Message()
 	if m == nil {
@@ -569,8 +560,7 @@ func (bot *Bot) toast(c tele.Context, text string, seconds int) {
 	}()
 }
 
-// autoDeleteInGroup — автоудаление команды и её ответа в групповом чате
-// (в ЛС сообщения остаются).
+// В ЛС сообщения остаются.
 func (bot *Bot) autoDeleteInGroup(c tele.Context, msg *tele.Message, seconds int) {
 	if !bot.isGroup(c) || msg == nil {
 		return
@@ -585,11 +575,6 @@ func (bot *Bot) autoDeleteInGroup(c tele.Context, msg *tele.Message, seconds int
 	}()
 }
 
-// ------------------------------------------------------------------ //
-// кнопки дашборда: старт/стоп/подтверждение
-// ------------------------------------------------------------------ //
-
-// requireChatPermission — права на управление сервером в чате кнопки.
 // Возвращает ownerID и true, если разрешено.
 func (bot *Bot) requireChatPermission(c tele.Context) (int64, bool) {
 	cb := c.Callback()
@@ -708,10 +693,6 @@ func (bot *Bot) cbRefreshDashboard(c tele.Context) error {
 	return nil
 }
 
-// ------------------------------------------------------------------ //
-// запрос и одобрение доступа
-// ------------------------------------------------------------------ //
-
 func (bot *Bot) cbRequestAccess(c tele.Context, parts []string) error {
 	cb := c.Callback()
 	if cb == nil || cb.Message == nil || cb.Sender == nil {
@@ -804,10 +785,6 @@ func (bot *Bot) cbApproveAccess(c tele.Context, parts []string) error {
 	return nil
 }
 
-// ------------------------------------------------------------------ //
-// текст (FSM-маршрутизация)
-// ------------------------------------------------------------------ //
-
 func (bot *Bot) onText(c tele.Context) error {
 	return bot.SafeCall(func() error {
 		m := c.Message()
@@ -826,10 +803,6 @@ func (bot *Bot) onText(c tele.Context) error {
 		return nil
 	})
 }
-
-// ------------------------------------------------------------------ //
-// дружелюбные ошибки запуска
-// ------------------------------------------------------------------ //
 
 // friendlyStartError — дружелюбное описание ошибки запуска: если сервер
 // уже запускается или оффлайн, пользователю показывается нейтральное

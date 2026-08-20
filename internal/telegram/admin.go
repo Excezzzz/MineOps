@@ -18,10 +18,6 @@ import (
 
 const usersPageSize = 10
 
-// ------------------------------------------------------------------ //
-// /start, /panel, /help (ЛС)
-// ------------------------------------------------------------------ //
-
 func (bot *Bot) cmdStart(c tele.Context) error {
 	return bot.SafeCall(func() error {
 		if !bot.isPrivate(c) {
@@ -115,10 +111,6 @@ func (bot *Bot) requireOwner(c tele.Context, uid int64) bool {
 	return true
 }
 
-// ------------------------------------------------------------------ //
-// панель: навигация
-// ------------------------------------------------------------------ //
-
 func (bot *Bot) cbPanel(c tele.Context, parts []string) error {
 	cb := c.Callback()
 	if cb == nil || cb.Message == nil || cb.Sender == nil {
@@ -189,7 +181,6 @@ func (bot *Bot) cbPanel(c tele.Context, parts []string) error {
 	return nil
 }
 
-// refreshServers — «🔄 Обновить серверы»: сверка с аккаунтом Aternos.
 func (bot *Bot) refreshServers(c tele.Context) {
 	cb := c.Callback()
 	uid := cb.Sender.ID
@@ -271,10 +262,6 @@ func keysOf(m map[int64]bool) []int64 {
 	}
 	return out
 }
-
-// ------------------------------------------------------------------ //
-// панель: серверы
-// ------------------------------------------------------------------ //
 
 func (bot *Bot) cbPanelServer(c tele.Context, parts []string) error {
 	cb := c.Callback()
@@ -397,10 +384,6 @@ func (bot *Bot) cbPanelAction(c tele.Context, parts []string) error {
 	}
 	return nil
 }
-
-// ------------------------------------------------------------------ //
-// панель: чаты и участники
-// ------------------------------------------------------------------ //
 
 func (bot *Bot) cbPanelChat(c tele.Context, parts []string) error {
 	cb := c.Callback()
@@ -569,10 +552,6 @@ func (bot *Bot) cbPanelChatServer(c tele.Context, parts []string) error {
 	return nil
 }
 
-// ------------------------------------------------------------------ //
-// панель: настройки
-// ------------------------------------------------------------------ //
-
 func (bot *Bot) cbOwnerSettings(c tele.Context, parts []string) error {
 	cb := c.Callback()
 	if cb == nil || cb.Message == nil || cb.Sender == nil {
@@ -643,10 +622,6 @@ func boolText(b bool, lang string) string {
 	}
 	return i18n.T(lang, "off")
 }
-
-// ------------------------------------------------------------------ //
-// /set_session, /emergency, /announce
-// ------------------------------------------------------------------ //
 
 func (bot *Bot) cmdSetSession(c tele.Context) error {
 	return bot.SafeCall(func() error {
@@ -751,10 +726,6 @@ func (bot *Bot) cmdAnnounce(c tele.Context) error {
 	})
 }
 
-// ------------------------------------------------------------------ //
-// удаление аккаунта
-// ------------------------------------------------------------------ //
-
 func (bot *Bot) cbDeleteAccount(c tele.Context, parts []string) error {
 	cb := c.Callback()
 	if cb == nil || cb.Message == nil || cb.Sender == nil {
@@ -784,10 +755,6 @@ func (bot *Bot) cbDeleteAccount(c tele.Context, parts []string) error {
 	_ = bot.edit(cb.Message, i18n.T(lang, "account_deleted"), nil)
 	return nil
 }
-
-// ------------------------------------------------------------------ //
-// обновление куки из панели (FSM admin:waiting_cookie)
-// ------------------------------------------------------------------ //
 
 func (bot *Bot) onNewCookieMessage(c tele.Context) {
 	m := c.Message()

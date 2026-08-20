@@ -1,8 +1,4 @@
-// Package database — multi-tenant SQLite-хранилище (порт database.py, схема v4).
-//
-// Схема совместима с Python-версией: тот же файл data/mineops.db, те же
-// таблицы и миграции (db_version, owners, servers, chats, chat_servers,
-// users, audit_log, server_meta). Legacy-таблицы v1 переименовываются в *_legacy.
+// Package database — SQLite storage with auto-migrations.
 package database
 
 import (
@@ -123,10 +119,6 @@ func Open(dbPath string) (*DB, error) {
 func (d *DB) Close() error {
 	return d.db.Close()
 }
-
-// ------------------------------------------------------------------ //
-// миграции
-// ------------------------------------------------------------------ //
 
 func (d *DB) tableNames() (map[string]bool, error) {
 	rows, err := d.db.Query("SELECT name FROM sqlite_master WHERE type = 'table'")
@@ -370,11 +362,7 @@ func (d *DB) createV2Schema() error {
 	return err
 }
 
-// ------------------------------------------------------------------ //
-// owners
-// ------------------------------------------------------------------ //
-
-// CreateOwner создаёт владельца с зашифрованной кукой (idempotent upsert).
+// CreateOwner — idempotent upsert.
 func (d *DB) CreateOwner(userID int64, username, fullName, session string) error {
 	now := nowISO()
 	_, err := d.db.Exec(
@@ -414,7 +402,6 @@ func scanOwners(rows *sql.Rows) ([]*Owner, error) {
 	return out, rows.Err()
 }
 
-// GetOwner возвращает владельца или nil.
 func (d *DB) GetOwner(userID int64) (*Owner, error) {
 	row := d.db.QueryRow(
 		"SELECT user_id, username, full_name, aternos_session, session_valid,"+
@@ -428,7 +415,6 @@ func (d *DB) GetOwner(userID int64) (*Owner, error) {
 	return o, err
 }
 
-// GetAllOwners возвращает всех владельцев.
 func (d *DB) GetAllOwners() ([]*Owner, error) {
 	rows, err := d.db.Query(
 		"SELECT user_id, username, full_name, aternos_session, session_valid," +
@@ -441,7 +427,6 @@ func (d *DB) GetAllOwners() ([]*Owner, error) {
 	return scanOwners(rows)
 }
 
-// IsOwner проверяет, является ли пользователь владельцем.
 func (d *DB) IsOwner(userID int64) (bool, error) {
 	var one int
 	err := d.db.QueryRow("SELECT 1 FROM owners WHERE user_id = ?", userID).Scan(&one)
@@ -451,26 +436,23 @@ func (d *DB) IsOwner(userID int64) (bool, error) {
 	return err == nil, err
 }
 
-// SetOwnerLang сохраняет язык интерфейса владельца.
 func (d *DB) SetOwnerLang(userID int64, lang string) error {
 	_, err := d.db.Exec("UPDATE owners SET lang = ? WHERE user_id = ?", lang, userID)
 	return err
 }
 
-// SetOwnerSchedule сохраняет расписание автозапуска владельца
-// (time "18:00", once=1 — однократный запуск; пустой time отключает).
+// "18:00" + once — однократный запуск; пустой time отключает.
 func (d *DB) SetOwnerSchedule(userID int64, scheduleTime string, once bool) error {
 	_, err := d.db.Exec("UPDATE owners SET schedule_time = ?, schedule_once = ?, updated_at = ? WHERE user_id = ?",
 		scheduleTime, boolInt(once), nowISO(), userID)
 	return err
 }
 
-// GetScheduledOwners возвращает владельцев с активным расписанием.
 func (d *DB) GetScheduledOwners() ([]*Owner, error) {
 	rows, err := d.db.Query(
-		"SELECT user_id, username, full_name, aternos_session, session_valid,"+
-			" max_servers, lockdown_mode, created_at, updated_at, pm_pinned_msg_id,"+
-			" schedule_time, schedule_once, lang"+
+		"SELECT user_id, username, full_name, aternos_session, session_valid," +
+			" max_servers, lockdown_mode, created_at, updated_at, pm_pinned_msg_id," +
+			" schedule_time, schedule_once, lang" +
 			" FROM owners WHERE schedule_time != '' AND session_valid = 1")
 	if err != nil {
 		return nil, err
@@ -478,7 +460,6 @@ func (d *DB) GetScheduledOwners() ([]*Owner, error) {
 	return scanOwners(rows)
 }
 
-// IsChatOwner — является ли пользователь владельцем данного чата.
 func (d *DB) IsChatOwner(chatID, userID int64) (bool, error) {
 	chat, err := d.GetChat(chatID)
 	if err != nil || chat == nil {
@@ -487,7 +468,6 @@ func (d *DB) IsChatOwner(chatID, userID int64) (bool, error) {
 	return chat.OwnerID == userID, nil
 }
 
-// UpdateOwnerSession обновляет зашифрованную куку и помечает сессию валидной.
 func (d *DB) UpdateOwnerSession(userID int64, encrypted string) error {
 	_, err := d.db.Exec(
 		"UPDATE owners SET aternos_session = ?, session_valid = 1, updated_at = ? WHERE user_id = ?",
@@ -495,7 +475,6 @@ func (d *DB) UpdateOwnerSession(userID int64, encrypted string) error {
 	return err
 }
 
-// UpdateOwnerProfile обновляет username/full_name владельца.
 func (d *DB) UpdateOwnerProfile(userID int64, username, fullName string) error {
 	_, err := d.db.Exec(
 		"UPDATE owners SET username = ?, full_name = ?, updated_at = ? WHERE user_id = ?",
@@ -503,7 +482,6 @@ func (d *DB) UpdateOwnerProfile(userID int64, username, fullName string) error {
 	return err
 }
 
-// SetOwnerLockdown включает/выключает lockdown владельца.
 func (d *DB) SetOwnerLockdown(userID int64, active bool) error {
 	_, err := d.db.Exec(
 		"UPDATE owners SET lockdown_mode = ?, updated_at = ? WHERE user_id = ?",
@@ -511,7 +489,6 @@ func (d *DB) SetOwnerLockdown(userID int64, active bool) error {
 	return err
 }
 
-// GetOwnerLockdown возвращает состояние lockdown.
 func (d *DB) GetOwnerLockdown(userID int64) (bool, error) {
 	var v int
 	err := d.db.QueryRow("SELECT lockdown_mode FROM owners WHERE user_id = ?", userID).Scan(&v)
@@ -521,7 +498,6 @@ func (d *DB) GetOwnerLockdown(userID int64) (bool, error) {
 	return v != 0, err
 }
 
-// SetOwnerPmPinned сохраняет id закреплённого дашборда владельца в ЛС.
 func (d *DB) SetOwnerPmPinned(userID int64, msgID int64) error {
 	_, err := d.db.Exec(
 		"UPDATE owners SET pm_pinned_msg_id = ?, updated_at = ? WHERE user_id = ?",
@@ -529,7 +505,6 @@ func (d *DB) SetOwnerPmPinned(userID int64, msgID int64) error {
 	return err
 }
 
-// GetOwnerPmPinned возвращает id закреплённого дашборда (0 — нет).
 func (d *DB) GetOwnerPmPinned(userID int64) (int64, error) {
 	var v sql.NullInt64
 	err := d.db.QueryRow("SELECT pm_pinned_msg_id FROM owners WHERE user_id = ?", userID).Scan(&v)
@@ -545,15 +520,11 @@ func (d *DB) GetOwnerPmPinned(userID int64) (int64, error) {
 	return v.Int64, nil
 }
 
-// DeleteOwner удаляет владельца; серверы/чаты/участники удаляются каскадом.
+// Каскадом удаляются серверы/чаты/участники (ON DELETE CASCADE в схеме).
 func (d *DB) DeleteOwner(userID int64) error {
 	_, err := d.db.Exec("DELETE FROM owners WHERE user_id = ?", userID)
 	return err
 }
-
-// ------------------------------------------------------------------ //
-// servers
-// ------------------------------------------------------------------ //
 
 func scanServer(row interface{ Scan(...any) error }) (*Server, error) {
 	var s Server
@@ -579,8 +550,7 @@ func scanServers(rows *sql.Rows) ([]*Server, error) {
 	return out, rows.Err()
 }
 
-// AddServer добавляет сервер (без лимита — на Aternos может быть сколько
-// угодно серверов) и возвращает его id.
+// Без лимита: на Aternos может быть сколько угодно серверов.
 func (d *DB) AddServer(ownerID int64, aternosID, serverIP, displayName string) (int64, error) {
 	_, err := d.db.Exec(
 		"INSERT OR IGNORE INTO servers (owner_id, aternos_id, server_ip, display_name, created_at)"+
@@ -596,7 +566,6 @@ func (d *DB) AddServer(ownerID int64, aternosID, serverIP, displayName string) (
 	return server.ID, nil
 }
 
-// GetServer возвращает сервер по id.
 func (d *DB) GetServer(serverID int64) (*Server, error) {
 	row := d.db.QueryRow(
 		"SELECT id, owner_id, aternos_id, server_ip, display_name, is_active,"+
@@ -608,7 +577,6 @@ func (d *DB) GetServer(serverID int64) (*Server, error) {
 	return s, err
 }
 
-// GetServerByAternosID возвращает сервер владельца по aternos_id.
 func (d *DB) GetServerByAternosID(ownerID int64, aternosID string) (*Server, error) {
 	row := d.db.QueryRow(
 		"SELECT id, owner_id, aternos_id, server_ip, display_name, is_active,"+
@@ -621,7 +589,6 @@ func (d *DB) GetServerByAternosID(ownerID int64, aternosID string) (*Server, err
 	return s, err
 }
 
-// GetServersByOwner возвращает все серверы владельца.
 func (d *DB) GetServersByOwner(ownerID int64) ([]*Server, error) {
 	rows, err := d.db.Query(
 		"SELECT id, owner_id, aternos_id, server_ip, display_name, is_active,"+
@@ -632,7 +599,6 @@ func (d *DB) GetServersByOwner(ownerID int64) ([]*Server, error) {
 	return scanServers(rows)
 }
 
-// GetActiveServersByOwner возвращает активные серверы владельца.
 func (d *DB) GetActiveServersByOwner(ownerID int64) ([]*Server, error) {
 	rows, err := d.db.Query(
 		"SELECT id, owner_id, aternos_id, server_ip, display_name, is_active,"+
@@ -644,43 +610,38 @@ func (d *DB) GetActiveServersByOwner(ownerID int64) ([]*Server, error) {
 	return scanServers(rows)
 }
 
-// SetServerActive включает/выключает сервер.
 func (d *DB) SetServerActive(serverID int64, active bool) error {
 	_, err := d.db.Exec("UPDATE servers SET is_active = ? WHERE id = ?", boolInt(active), serverID)
 	return err
 }
 
-// DeactivateServer деактивирует сервер (is_active=0).
 func (d *DB) DeactivateServer(serverID int64) error {
 	_, err := d.db.Exec("UPDATE servers SET is_active = 0 WHERE id = ?", serverID)
 	return err
 }
 
-// UnbindServerFromAllChats отвязывает сервер от всех чатов.
 func (d *DB) UnbindServerFromAllChats(serverID int64) error {
 	_, err := d.db.Exec("DELETE FROM chat_servers WHERE server_id = ?", serverID)
 	return err
 }
 
-// UpdateServerName переименовывает сервер.
 func (d *DB) UpdateServerName(serverID int64, displayName string) error {
 	_, err := d.db.Exec("UPDATE servers SET display_name = ? WHERE id = ?", displayName, serverID)
 	return err
 }
 
-// SetServerAutoConfirm задаёт автоподтверждение запуска.
 func (d *DB) SetServerAutoConfirm(serverID int64, enabled bool) error {
 	_, err := d.db.Exec("UPDATE servers SET auto_confirm = ? WHERE id = ?", boolInt(enabled), serverID)
 	return err
 }
 
-// RemoveServer удаляет сервер; связки удаляются каскадом.
+// Каскадом удаляются связки (ON DELETE CASCADE в схеме).
 func (d *DB) RemoveServer(serverID int64) error {
 	_, err := d.db.Exec("DELETE FROM servers WHERE id = ?", serverID)
 	return err
 }
 
-// SetServerPort сохраняет последний известный Minecraft-порт (upsert).
+// Upsert последнего известного Minecraft-порта.
 func (d *DB) SetServerPort(serverID int64, mcPort int) error {
 	_, err := d.db.Exec(
 		"INSERT INTO server_meta (server_id, mc_port, updated_at) VALUES (?, ?, ?)"+
@@ -689,7 +650,6 @@ func (d *DB) SetServerPort(serverID int64, mcPort int) error {
 	return err
 }
 
-// GetServerPort возвращает последний известный порт (0 — неизвестен).
 func (d *DB) GetServerPort(serverID int64) (int, error) {
 	var v sql.NullInt64
 	err := d.db.QueryRow("SELECT mc_port FROM server_meta WHERE server_id = ?", serverID).Scan(&v)
@@ -704,10 +664,6 @@ func (d *DB) GetServerPort(serverID int64) (int, error) {
 	}
 	return int(v.Int64), nil
 }
-
-// ------------------------------------------------------------------ //
-// chats
-// ------------------------------------------------------------------ //
 
 func scanChat(row interface{ Scan(...any) error }) (*Chat, error) {
 	var c Chat
@@ -731,7 +687,7 @@ func scanChats(rows *sql.Rows) ([]*Chat, error) {
 	return out, rows.Err()
 }
 
-// AddChat привязывает чат к владельцу. False — чат занят другим владельцем.
+// False — чат занят другим владельцем.
 func (d *DB) AddChat(chatID, ownerID int64, title string) (bool, error) {
 	chat, err := d.GetChat(chatID)
 	if err != nil {
@@ -746,7 +702,6 @@ func (d *DB) AddChat(chatID, ownerID int64, title string) (bool, error) {
 	return err == nil, err
 }
 
-// GetChat возвращает чат по id.
 func (d *DB) GetChat(chatID int64) (*Chat, error) {
 	row := d.db.QueryRow(
 		"SELECT chat_id, owner_id, title, pinned_msg_id, is_active, created_at"+
@@ -758,7 +713,6 @@ func (d *DB) GetChat(chatID int64) (*Chat, error) {
 	return c, err
 }
 
-// GetChatOwner возвращает строку владельца привязанного чата (nil — чат не привязан).
 func (d *DB) GetChatOwner(chatID int64) (*Owner, error) {
 	row := d.db.QueryRow(
 		"SELECT o.user_id, o.username, o.full_name, o.aternos_session, o.session_valid,"+
@@ -772,7 +726,6 @@ func (d *DB) GetChatOwner(chatID int64) (*Owner, error) {
 	return o, err
 }
 
-// ChatExists проверяет, зарегистрирован ли чат.
 func (d *DB) ChatExists(chatID int64) (bool, error) {
 	var one int
 	err := d.db.QueryRow("SELECT 1 FROM chats WHERE chat_id = ?", chatID).Scan(&one)
@@ -782,7 +735,6 @@ func (d *DB) ChatExists(chatID int64) (bool, error) {
 	return err == nil, err
 }
 
-// GetChatsByOwner возвращает активные чаты владельца.
 func (d *DB) GetChatsByOwner(ownerID int64) ([]*Chat, error) {
 	rows, err := d.db.Query(
 		"SELECT chat_id, owner_id, title, pinned_msg_id, is_active, created_at"+
@@ -793,19 +745,16 @@ func (d *DB) GetChatsByOwner(ownerID int64) ([]*Chat, error) {
 	return scanChats(rows)
 }
 
-// SetChatTitle обновляет название чата.
 func (d *DB) SetChatTitle(chatID int64, title string) error {
 	_, err := d.db.Exec("UPDATE chats SET title = ? WHERE chat_id = ?", title, chatID)
 	return err
 }
 
-// SetChatPinnedMsg сохраняет id закреплённого дашборда.
 func (d *DB) SetChatPinnedMsg(chatID, msgID int64) error {
 	_, err := d.db.Exec("UPDATE chats SET pinned_msg_id = ? WHERE chat_id = ?", msgID, chatID)
 	return err
 }
 
-// GetChatPinnedMsg возвращает id закреплённого дашборда (0 — нет).
 func (d *DB) GetChatPinnedMsg(chatID int64) (int64, error) {
 	var v sql.NullInt64
 	err := d.db.QueryRow("SELECT pinned_msg_id FROM chats WHERE chat_id = ?", chatID).Scan(&v)
@@ -821,35 +770,26 @@ func (d *DB) GetChatPinnedMsg(chatID int64) (int64, error) {
 	return v.Int64, nil
 }
 
-// SetChatActive включает/выключает чат.
 func (d *DB) SetChatActive(chatID int64, active bool) error {
 	_, err := d.db.Exec("UPDATE chats SET is_active = ? WHERE chat_id = ?", boolInt(active), chatID)
 	return err
 }
 
-// RemoveChat отвязывает чат; связки и участники удаляются каскадом.
 func (d *DB) RemoveChat(chatID int64) error {
 	_, err := d.db.Exec("DELETE FROM chats WHERE chat_id = ?", chatID)
 	return err
 }
 
-// ------------------------------------------------------------------ //
-// chat_servers
-// ------------------------------------------------------------------ //
-
-// LinkServerToChat привязывает сервер к чату.
 func (d *DB) LinkServerToChat(chatID, serverID int64) error {
 	_, err := d.db.Exec("INSERT OR IGNORE INTO chat_servers (chat_id, server_id) VALUES (?, ?)", chatID, serverID)
 	return err
 }
 
-// UnlinkServerFromChat отвязывает сервер от чата.
 func (d *DB) UnlinkServerFromChat(chatID, serverID int64) error {
 	_, err := d.db.Exec("DELETE FROM chat_servers WHERE chat_id = ? AND server_id = ?", chatID, serverID)
 	return err
 }
 
-// GetChatServerIDs возвращает id серверов чата.
 func (d *DB) GetChatServerIDs(chatID int64) ([]int64, error) {
 	rows, err := d.db.Query("SELECT server_id FROM chat_servers WHERE chat_id = ?", chatID)
 	if err != nil {
@@ -867,7 +807,6 @@ func (d *DB) GetChatServerIDs(chatID int64) ([]int64, error) {
 	return out, rows.Err()
 }
 
-// GetChatServers возвращает активные серверы чата.
 func (d *DB) GetChatServers(chatID int64) ([]*Server, error) {
 	rows, err := d.db.Query(
 		"SELECT s.id, s.owner_id, s.aternos_id, s.server_ip, s.display_name,"+
@@ -880,7 +819,6 @@ func (d *DB) GetChatServers(chatID int64) ([]*Server, error) {
 	return scanServers(rows)
 }
 
-// GetChatsForServer возвращает активные чаты, где привязан сервер.
 func (d *DB) GetChatsForServer(serverID int64) ([]*Chat, error) {
 	rows, err := d.db.Query(
 		"SELECT c.chat_id, c.owner_id, c.title, c.pinned_msg_id, c.is_active, c.created_at"+
@@ -892,7 +830,6 @@ func (d *DB) GetChatsForServer(serverID int64) ([]*Chat, error) {
 	return scanChats(rows)
 }
 
-// IsServerLinkedToChat проверяет привязку сервера к чату.
 func (d *DB) IsServerLinkedToChat(chatID, serverID int64) (bool, error) {
 	var one int
 	err := d.db.QueryRow("SELECT 1 FROM chat_servers WHERE chat_id = ? AND server_id = ?", chatID, serverID).Scan(&one)
@@ -902,11 +839,7 @@ func (d *DB) IsServerLinkedToChat(chatID, serverID int64) (bool, error) {
 	return err == nil, err
 }
 
-// ------------------------------------------------------------------ //
-// users (участники чатов)
-// ------------------------------------------------------------------ //
-
-// UpsertChatUser регистрирует участника чата; права сохраняются.
+// Права сохраняются при обновлении имени.
 func (d *DB) UpsertChatUser(chatID, userID int64, username, fullName string) error {
 	_, err := d.db.Exec(
 		"INSERT INTO users (user_id, chat_id, username, full_name, created_at)"+
@@ -924,7 +857,6 @@ func (d *DB) RevokeAllAccess() error {
 	return err
 }
 
-// GetUserAccess возвращает право доступа пользователя в чате.
 func (d *DB) GetUserAccess(userID, chatID int64) (bool, error) {
 	var v int
 	err := d.db.QueryRow("SELECT has_access FROM users WHERE user_id = ? AND chat_id = ?", userID, chatID).Scan(&v)
@@ -934,8 +866,7 @@ func (d *DB) GetUserAccess(userID, chatID int64) (bool, error) {
 	return v != 0, err
 }
 
-// GetUserIDByUsername ищет user_id участника чата по username (без @).
-// Возвращает 0, если пользователь не найден (никогда не писал в чат).
+// Возвращает 0, если пользователь никогда не писал в чат.
 func (d *DB) GetUserIDByUsername(chatID int64, username string) (int64, error) {
 	var id int64
 	err := d.db.QueryRow(
@@ -947,7 +878,6 @@ func (d *DB) GetUserIDByUsername(chatID int64, username string) (int64, error) {
 	return id, err
 }
 
-// SetUserAccess выдаёт/отзывает доступ в чате.
 func (d *DB) SetUserAccess(userID, chatID int64, hasAccess bool) error {
 	if _, err := d.db.Exec(
 		"INSERT INTO users (user_id, chat_id, created_at) VALUES (?, ?, ?)"+
@@ -982,7 +912,6 @@ func (d *DB) UserCanManage(userID, chatID int64) (bool, error) {
 	return d.GetUserAccess(userID, chatID)
 }
 
-// GetChatUsersPaginated возвращает страницу участников чата.
 func (d *DB) GetChatUsersPaginated(chatID int64, limit, offset int) ([]*ChatUser, error) {
 	if offset < 0 {
 		offset = 0
@@ -1007,18 +936,12 @@ func (d *DB) GetChatUsersPaginated(chatID int64, limit, offset int) ([]*ChatUser
 	return out, rows.Err()
 }
 
-// GetChatUsersCount возвращает число участников чата.
 func (d *DB) GetChatUsersCount(chatID int64) (int, error) {
 	var n int
 	err := d.db.QueryRow("SELECT COUNT(*) FROM users WHERE chat_id = ?", chatID).Scan(&n)
 	return n, err
 }
 
-// ------------------------------------------------------------------ //
-// audit_log
-// ------------------------------------------------------------------ //
-
-// LogAction пишет запись в журнал действий владельца.
 func (d *DB) LogAction(ownerID int64, action, details string, userID, chatID, serverID int64) error {
 	_, err := d.db.Exec(
 		"INSERT INTO audit_log (owner_id, user_id, chat_id, server_id, action, details, created_at)"+
@@ -1027,7 +950,6 @@ func (d *DB) LogAction(ownerID int64, action, details string, userID, chatID, se
 	return err
 }
 
-// GetAuditLog возвращает последние записи журнала владельца.
 func (d *DB) GetAuditLog(ownerID int64, limit int) ([]*AuditEntry, error) {
 	rows, err := d.db.Query(
 		"SELECT id, owner_id, user_id, chat_id, server_id, action, details, created_at"+
@@ -1048,7 +970,6 @@ func (d *DB) GetAuditLog(ownerID int64, limit int) ([]*AuditEntry, error) {
 	return out, rows.Err()
 }
 
-// GetStartCount возвращает общее число запусков владельца (audit_log).
 func (d *DB) GetStartCount(ownerID int64) (int, error) {
 	var n int
 	err := d.db.QueryRow(
@@ -1060,7 +981,6 @@ func (d *DB) GetStartCount(ownerID int64) (int, error) {
 	return n, err
 }
 
-// GetStartCountSince возвращает число запусков владельца с указанной даты.
 func (d *DB) GetStartCountSince(ownerID int64, since time.Time) (int, error) {
 	var n int
 	err := d.db.QueryRow(
@@ -1072,7 +992,6 @@ func (d *DB) GetStartCountSince(ownerID int64, since time.Time) (int, error) {
 	return n, err
 }
 
-// GetRecentStarts возвращает последние запуски владельца (для /stats).
 func (d *DB) GetRecentStarts(ownerID int64, limit int) ([]*AuditEntry, error) {
 	rows, err := d.db.Query(
 		"SELECT id, owner_id, user_id, chat_id, server_id, action, details, created_at"+

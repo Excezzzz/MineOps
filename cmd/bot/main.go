@@ -1,4 +1,3 @@
-// MineOps — бот управления серверами Aternos (Go-порт).
 package main
 
 import (

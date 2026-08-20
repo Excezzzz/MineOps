@@ -18,7 +18,6 @@ import (
 	"mineops/internal/queuewatcher"
 )
 
-// Bot — главный объект бота (диспетчер, мидлвари, состояние).
 type Bot struct {
 	b        *tele.Bot
 	cfg      *config.Config
@@ -45,7 +44,6 @@ const (
 	sessionNotifyCooldown = 10 * time.Minute
 )
 
-// NewBot создаёт и настраивает telebot.
 func NewBot(cfg *config.Config, db *database.DB, managers *aternos.Registry,
 	dash *dashboard.Dashboard, watcher *queuewatcher.Watcher) (*Bot, error) {
 
@@ -73,7 +71,6 @@ func NewBot(cfg *config.Config, db *database.DB, managers *aternos.Registry,
 	}
 	bot.b = b
 
-	// Мидлвари: восстановление после паники, фаервол, регистрация участников.
 	b.Use(func(next tele.HandlerFunc) tele.HandlerFunc {
 		return func(c tele.Context) error {
 			defer func() {
@@ -111,17 +108,11 @@ func NewBot(cfg *config.Config, db *database.DB, managers *aternos.Registry,
 	return bot, nil
 }
 
-// Bot возвращает telebot (для планировщика).
 func (bot *Bot) Bot() *tele.Bot { return bot.b }
 
-// Start запускает поллинг (блокирует).
 func (bot *Bot) Start() {
 	bot.b.Start()
 }
-
-// ------------------------------------------------------------------ //
-// регистрация хэндлеров
-// ------------------------------------------------------------------ //
 
 func (bot *Bot) registerHandlers() {
 	b := bot.b
@@ -180,11 +171,6 @@ func (bot *Bot) setCommands() {
 	)
 }
 
-// ------------------------------------------------------------------ //
-// мидлвари
-// ------------------------------------------------------------------ //
-
-// firewall — мидлварь доступа:
 //   - ЛС: публичный онбординг — любой пользователь может пройти /start,
 //     добавить свои серверы Aternos и управлять ими (multi-tenant);
 //   - группы: привязанные к любому владельцу чаты работают в штатном режиме,
@@ -216,8 +202,7 @@ func (bot *Bot) firewall(c tele.Context) bool {
 	}
 }
 
-// registerUser — аналог RegisterMiddleware: участники привязанных чатов
-// автоматически попадают в users (для проверки доступа).
+// Участники привязанных чатов автоматически попадают в users (для проверки доступа).
 func (bot *Bot) registerUser(c tele.Context) {
 	m := c.Message()
 	if m == nil || m.Sender == nil {
@@ -233,15 +218,12 @@ func (bot *Bot) registerUser(c tele.Context) {
 	_ = bot.db.UpsertChatUser(m.Chat.ID, m.Sender.ID, m.Sender.Username, m.Sender.FirstName+" "+m.Sender.LastName)
 }
 
-// lockdownActive — включён ли режим экстренной блокировки у владельца.
 func (bot *Bot) lockdownActive(ownerID int64) bool {
 	on, _ := bot.db.GetOwnerLockdown(ownerID)
 	return on
 }
 
-// lockdownBlocked — если у владельца включён локдаун, отвечает пользователю
-// сообщением о блокировке (кнопка — всплывающее уведомление, команда —
-// текст) и возвращает true: запуск заблокирован.
+// Отвечает на кнопку/команду при локдауне; true — запуск заблокирован.
 func (bot *Bot) lockdownBlocked(c tele.Context, ownerID int64) bool {
 	if !bot.lockdownActive(ownerID) {
 		return false
@@ -256,8 +238,7 @@ func (bot *Bot) lockdownBlocked(c tele.Context, ownerID int64) bool {
 	return true
 }
 
-// NotifySessionExpired — уведомление Владельца в ЛС, что сессия Aternos
-// истекла (срабатывает из перехватчика HTTP-запросов к Aternos).
+// Сессия Aternos истекла (срабатывает из перехватчика HTTP-запросов).
 // Анти-спам: не чаще одного сообщения на владельца в 10 минут.
 func (bot *Bot) NotifySessionExpired(ownerID int64) {
 	if ownerID <= 0 {
@@ -278,10 +259,6 @@ func (bot *Bot) NotifySessionExpired(ownerID int64) {
 		log.Printf("failed to notify owner %d about session: %v", ownerID, err)
 	}
 }
-
-// ------------------------------------------------------------------ //
-// общий обработчик ошибок
-// ------------------------------------------------------------------ //
 
 func (bot *Bot) onError(err error, c tele.Context) {
 	log.Printf("ERROR: %v", err)
@@ -316,7 +293,7 @@ func isNoiseError(err error) bool {
 	return false
 }
 
-// notifyOwnerError — отправка ошибки Владельцу в ЛС.
+// Отправка ошибки Владельцу в ЛС.
 // Анти-спам: не чаще одного сообщения в минуту.
 func (bot *Bot) notifyOwnerError(text string) {
 	if bot.cfg.SuperAdminID <= 0 {
@@ -341,8 +318,8 @@ func (bot *Bot) notifyOwnerError(text string) {
 	}
 }
 
-// notifyOwnerCritical — уведомление Владельца о критических падениях
-// (panic/exception). Анти-спам: не чаще одного сообщения в минуту.
+// Уведомление Владельца о паниках (panic/exception).
+// Анти-спам: не чаще одного сообщения в минуту.
 func (bot *Bot) notifyOwnerCritical(reason string, stack []byte) {
 	if bot.cfg.SuperAdminID <= 0 {
 		return
@@ -374,7 +351,6 @@ func escapeHTML(s string) string {
 	return r.Replace(s)
 }
 
-// SafeCall выполняет хэндлер с защитой от паники.
 func (bot *Bot) SafeCall(fn func() error) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -384,10 +360,6 @@ func (bot *Bot) SafeCall(fn func() error) (err error) {
 	}()
 	return fn()
 }
-
-// ------------------------------------------------------------------ //
-// единый диспетчер callback-кнопок
-// ------------------------------------------------------------------ //
 
 func (bot *Bot) onCallback(c tele.Context) error {
 	return bot.SafeCall(func() error {
@@ -436,10 +408,6 @@ func (bot *Bot) onCallback(c tele.Context) error {
 	})
 }
 
-// ------------------------------------------------------------------ //
-// вспомогательные
-// ------------------------------------------------------------------ //
-
 func (bot *Bot) answer(c tele.Context, text string, showAlert bool) {
 	_ = c.Respond(&tele.CallbackResponse{Text: text, ShowAlert: showAlert})
 }
@@ -458,7 +426,7 @@ func (bot *Bot) edit(msg tele.Editable, text string, kb *tele.ReplyMarkup) error
 	return err
 }
 
-// decodeCookie — значение куки из текста сообщения (обрезает префиксы).
+// Обрезает всё до последнего «=».
 func decodeCookie(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if idx := strings.LastIndex(raw, "="); idx >= 0 {
