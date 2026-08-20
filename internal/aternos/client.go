@@ -483,7 +483,7 @@ func (s *Session) Start(ctx context.Context, servID string) error {
 	reason := util.ToStr(result["error"])
 	if reason == "eula" {
 		if _, err := s.actionServer(ctx, "accept-eula", servID, nil); err != nil {
-			log.Printf("aternos: accept-eula не выполнен: %v", err)
+			log.Printf("aternos: accept-eula failed: %v", err)
 		}
 		if result, err = start(); err != nil {
 			return err

@@ -244,7 +244,7 @@ func (bot *Bot) cmdSchedule(c tele.Context) error {
 func (bot *Bot) CheckSchedule() {
 	owners, err := bot.db.GetScheduledOwners()
 	if err != nil {
-		log.Printf("schedule: владельцы с расписанием не получены: %v", err)
+		log.Printf("schedule: scheduled owners not fetched: %v", err)
 		return
 	}
 	now := time.Now()
@@ -280,7 +280,7 @@ func (bot *Bot) fireSchedule(o *database.Owner) {
 		text, err := bot.managers.For(o.UserID).StartServer(ctx, s.ID)
 		cancel()
 		if err != nil {
-			log.Printf("schedule: сервер %d владельца %d не запустился: %v", s.ID, o.UserID, err)
+			log.Printf("schedule: server %d of owner %d failed to start: %v", s.ID, o.UserID, err)
 			continue
 		}
 		_ = text

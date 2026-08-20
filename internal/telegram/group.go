@@ -48,7 +48,7 @@ func (bot *Bot) cmdLink(c tele.Context) error {
 		}
 		_, _ = bot.db.AddChat(chatID, uid, m.Chat.Title)
 		_ = bot.db.LogAction(uid, "chat_link", fmt.Sprintf("chat %d", chatID), 0, chatID, 0)
-		log.Printf("чат %d: владелец %d привязал чат (серверы — позже)", chatID, uid)
+		log.Printf("chat %d: owner %d linked chat (servers later)", chatID, uid)
 		_, err := bot.b.Send(m.Chat, i18n.T(lang, "link_ok"))
 		return err
 	})
@@ -762,7 +762,7 @@ func (bot *Bot) cbRequestAccess(c tele.Context, parts []string) error {
 			html.EscapeString(cb.Sender.Username)),
 		approveAccessKB(uid, chatID, bot.ownerLang(owner.UserID)))
 	if err != nil {
-		log.Printf("не удалось доставить запрос владельцу %d: %v", owner.UserID, err)
+		log.Printf("failed to deliver access request to owner %d: %v", owner.UserID, err)
 		bot.answer(c, i18n.T(lang, "access_req_fail"), false)
 		return nil
 	}

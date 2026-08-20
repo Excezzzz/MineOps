@@ -35,7 +35,7 @@ func main() {
 		log.Fatalf("база данных: %v", err)
 	}
 	defer db.Close()
-	log.Printf("БД: %s (схема v%d)", cfg.DBPath, database.SchemaVersion)
+	log.Printf("DB: %s (schema v%d)", cfg.DBPath, database.SchemaVersion)
 
 	httpClient := &http.Client{Timeout: 30 * time.Second}
 	managers := aternos.NewRegistry(db, httpClient)
@@ -58,25 +58,25 @@ func main() {
 		dash.UpdateDashboards(context.Background(), bot.Bot())
 	})
 	if err != nil {
-		log.Printf("планировщик (дашборд): %v", err)
+		log.Printf("scheduler (dashboard): %v", err)
 	}
 	_, err = s.Every(cfg.SessionCheck).Seconds().Do(func() {
 		dash.CheckAllSessions(context.Background(), bot.Bot())
 	})
 	if err != nil {
-		log.Printf("планировщик (сессии): %v", err)
+		log.Printf("scheduler (sessions): %v", err)
 	}
 	// Расписание автозапуска: каждые 60 секунд проверяем совпадение времени.
 	_, err = s.Every(60).Seconds().Do(func() {
 		bot.CheckSchedule()
 	})
 	if err != nil {
-		log.Printf("планировщик (расписание): %v", err)
+		log.Printf("scheduler (schedule): %v", err)
 	}
 	s.StartAsync()
-	log.Printf("планировщик запущен: дашборд %ds, сессии %ds, расписание 60s", cfg.UpdateInterval, cfg.SessionCheck)
+	log.Printf("scheduler started: dashboard %ds, sessions %ds, schedule 60s", cfg.UpdateInterval, cfg.SessionCheck)
 
-	log.Printf("бот запущен (pid %d)", os.Getpid())
+	log.Printf("bot started (pid %d)", os.Getpid())
 	// Восстановить наблюдение за серверами, которые уже в очереди Aternos
 	// (watcher'ы живут в памяти и теряются при перезапуске бота).
 	go func() {
@@ -89,7 +89,7 @@ func main() {
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-sig
-		log.Println("получен сигнал остановки, завершаю работу...")
+		log.Println("shutdown signal received, stopping...")
 		s.Stop()
 		bot.Bot().Stop()
 		_ = db.Close()

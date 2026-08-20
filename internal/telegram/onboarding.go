@@ -155,7 +155,7 @@ func (bot *Bot) cbOnboarding(c tele.Context, parts []string) error {
 		if err := bot.db.CreateOwner(uid,
 			cb.Sender.Username, cb.Sender.FirstName+" "+cb.Sender.LastName,
 			crypto.EncryptSession(cookie)); err != nil {
-			log.Printf("onboarding: создание владельца %d не удалось: %v", uid, err)
+			log.Printf("onboarding: failed to create owner %d: %v", uid, err)
 			bot.answer(c, i18n.T(lang, "onb_create_fail"), true)
 			return nil
 		}

@@ -700,7 +700,7 @@ func (bot *Bot) cmdEmergency(c tele.Context) error {
 		}
 		// 1) Мгновенно отбираем права у ВСЕХ пользователей всех чатов.
 		if err := bot.db.RevokeAllAccess(); err != nil {
-			log.Printf("emergency: сброс прав не удался: %v", err)
+			log.Printf("emergency: failed to revoke rights: %v", err)
 		}
 		// 2) Глобальный флаг lockdown_mode = ON.
 		_ = bot.db.SetOwnerLockdown(uid, true)
@@ -742,7 +742,7 @@ func (bot *Bot) cmdAnnounce(c tele.Context) error {
 			if _, err := bot.b.Send(&tele.Chat{ID: owner.UserID}, "📢 "+text); err == nil {
 				sent++
 			} else {
-				log.Printf("announce: владельцу %d не доставлено: %v", owner.UserID, err)
+				log.Printf("announce: not delivered to owner %d: %v", owner.UserID, err)
 			}
 		}
 		_, err := bot.b.Send(m.Chat,

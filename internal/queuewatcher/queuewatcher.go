@@ -80,7 +80,7 @@ func (w *Watcher) Start(b *tele.Bot, ownerID, serverID int64) {
 func (w *Watcher) Rescan(b *tele.Bot) {
 	owners, err := w.db.GetAllOwners()
 	if err != nil {
-		log.Printf("queuewatcher: rescan: владельцы не получены: %v", err)
+		log.Printf("queuewatcher: rescan: owners not fetched: %v", err)
 		return
 	}
 	for _, owner := range owners {
@@ -130,7 +130,7 @@ func (w *Watcher) watchLoop(b *tele.Bot, ownerID, serverID int64) {
 		cancel()
 
 		if err != nil {
-			log.Printf("queuewatcher: сервер %d: опрос не удался: %v", serverID, err)
+			log.Printf("queuewatcher: server %d: poll failed: %v", serverID, err)
 			failures++
 			if failures >= maxFailures {
 				w.notifyOwner(b, ownerID, serverID, fmt.Sprintf("опрос очереди не удался: %v", err))
@@ -147,7 +147,7 @@ func (w *Watcher) watchLoop(b *tele.Bot, ownerID, serverID int64) {
 		// Сервер вышел онлайн (status==1 или lang on/online) — уведомляем чаты
 		// и завершаем наблюдение.
 		if status.Status == 1 || serverLang == "on" || serverLang == "online" {
-			log.Printf("queuewatcher: сервер %d: онлайн, watcher завершён", serverID)
+			log.Printf("queuewatcher: server %d: online, watcher finished", serverID)
 			if p := util.ToInt(status.Port); p > 0 {
 				_ = w.db.SetServerPort(serverID, p)
 			}
@@ -171,10 +171,10 @@ func (w *Watcher) watchLoop(b *tele.Bot, ownerID, serverID int64) {
 			ccancel()
 			lastBlindConfirm = time.Now()
 			if err != nil {
-				log.Printf("queuewatcher: сервер %d: confirm не удался (lang=%q): %v — ждём итерации",
+				log.Printf("queuewatcher: server %d: confirm failed (lang=%q): %v — waiting for next iteration",
 					serverID, serverLang, err)
 			} else {
-				log.Printf("queuewatcher: сервер %d: запуск подтверждён (lang=%q)", serverID, serverLang)
+				log.Printf("queuewatcher: server %d: start confirmed (lang=%q)", serverID, serverLang)
 				w.dash.SetQueuePosition(serverID, 0)
 				w.refreshDashboard(b, serverID)
 			}
@@ -189,7 +189,7 @@ func (w *Watcher) watchLoop(b *tele.Bot, ownerID, serverID int64) {
 			_ = manager.ConfirmServer(cctx, serverID)
 			ccancel()
 			lastBlindConfirm = time.Now()
-			log.Printf("queuewatcher: сервер %d: слепой confirm отправлен", serverID)
+			log.Printf("queuewatcher: server %d: blind confirm sent", serverID)
 		}
 
 		switch serverLang {
@@ -197,7 +197,7 @@ func (w *Watcher) watchLoop(b *tele.Bot, ownerID, serverID int64) {
 			active = true
 			if queueValue > 0 {
 				w.dash.SetQueuePosition(serverID, queueValue)
-				log.Printf("queuewatcher: сервер %d: очередь идёт, позиция %d", serverID, queueValue)
+				log.Printf("queuewatcher: server %d: queue in progress, position %d", serverID, queueValue)
 			}
 			now := time.Now()
 			if now.Sub(lastDashUpdate) >= dashboardPeriod {
@@ -206,9 +206,9 @@ func (w *Watcher) watchLoop(b *tele.Bot, ownerID, serverID int64) {
 			}
 		case "loading", "starting":
 			active = true
-			log.Printf("queuewatcher: сервер %d: грузится (lang=%q), ждём запуска", serverID, serverLang)
+			log.Printf("queuewatcher: server %d: loading (lang=%q), waiting for start", serverID, serverLang)
 		default:
-			log.Printf("queuewatcher: сервер %d: состояние lang=%q, ждём итерации", serverID, serverLang)
+			log.Printf("queuewatcher: server %d: state lang=%q, waiting for next iteration", serverID, serverLang)
 		}
 
 		if active {
@@ -349,7 +349,7 @@ func (w *Watcher) notifyServerOnline(b *tele.Bot, serverID int64, status *aterno
 		text := i18n.T(lang, "qw_online", html.EscapeString(name), html.EscapeString(ip))
 		msg, err := b.Send(&tele.Chat{ID: ch.ChatID}, text)
 		if err != nil {
-			log.Printf("queuewatcher: уведомление об онлайне сервера %d в чат %d не отправлено: %v",
+			log.Printf("queuewatcher: online notification for server %d not sent to chat %d: %v",
 				serverID, ch.ChatID, err)
 			continue
 		}
@@ -370,7 +370,7 @@ func (w *Watcher) notifyOwner(b *tele.Bot, ownerID, serverID int64, reason strin
 	_, err = b.Send(&tele.Chat{ID: ownerID},
 		i18n.T(lang, "qw_failed", html.EscapeString(name), reason))
 	if err != nil {
-		log.Printf("queuewatcher: не удалось уведомить владельца %d о сервере %d: %v", ownerID, serverID, err)
+		log.Printf("queuewatcher: failed to notify owner %d about server %d: %v", ownerID, serverID, err)
 	}
 	_ = w.db.LogAction(ownerID, "auto_confirm_failed", fmt.Sprintf("%s: %s", name, reason), 0, 0, serverID)
 }

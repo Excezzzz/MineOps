@@ -275,7 +275,7 @@ func (bot *Bot) NotifySessionExpired(ownerID int64) {
 	_, err := bot.b.Send(&tele.Chat{ID: ownerID},
 		i18n.T(bot.ownerLang(ownerID), "sess_expired_notify"))
 	if err != nil {
-		log.Printf("не удалось уведомить владельца %d о сессии: %v", ownerID, err)
+		log.Printf("failed to notify owner %d about session: %v", ownerID, err)
 	}
 }
 
@@ -337,7 +337,7 @@ func (bot *Bot) notifyOwnerError(text string) {
 	}
 	_, err := bot.b.Send(&tele.Chat{ID: bot.cfg.SuperAdminID}, msg)
 	if err != nil {
-		log.Printf("не удалось уведомить суперадмина: %v", err)
+		log.Printf("failed to notify superadmin: %v", err)
 	}
 }
 
@@ -365,7 +365,7 @@ func (bot *Bot) notifyOwnerCritical(reason string, stack []byte) {
 	}
 	_, err := bot.b.Send(&tele.Chat{ID: bot.cfg.SuperAdminID}, text)
 	if err != nil {
-		log.Printf("не удалось уведомить суперадмина: %v", err)
+		log.Printf("failed to notify superadmin: %v", err)
 	}
 }
 
@@ -431,7 +431,7 @@ func (bot *Bot) onCallback(c tele.Context) error {
 		case cbNoop:
 			return c.Respond(&tele.CallbackResponse{})
 		}
-		log.Printf("callback: неизвестный префикс: %q", cb.Data)
+		log.Printf("callback: unknown prefix: %q", cb.Data)
 		return c.Respond(&tele.CallbackResponse{})
 	})
 }

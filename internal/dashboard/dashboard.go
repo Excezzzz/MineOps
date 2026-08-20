@@ -342,7 +342,7 @@ func (d *Dashboard) GetAuthoritativeStatus(ctx context.Context, ownerID int64, s
 
 func (d *Dashboard) tryPin(b *tele.Bot, chatID int64, msg *tele.Message) bool {
 	if err := b.Pin(msg, tele.Silent); err != nil {
-		log.Printf("dashboard: chat %d: не удалось закрепить (%v)", chatID, err)
+		log.Printf("dashboard: chat %d: failed to pin (%v)", chatID, err)
 		return false
 	}
 	return true
@@ -394,7 +394,7 @@ func (d *Dashboard) renderDashboard(ctx context.Context, b *tele.Bot, chatID int
 		delete(d.pinPending, chatID)
 		delete(d.pinNoticeSent, chatID)
 		d.mu.Unlock()
-		log.Printf("dashboard: chat %d: создан и закреплён (msg %d)", chatID, msg.ID)
+		log.Printf("dashboard: chat %d: created and pinned (msg %d)", chatID, msg.ID)
 	} else {
 		d.mu.Lock()
 		d.pinPending[chatID] = true
@@ -404,7 +404,7 @@ func (d *Dashboard) renderDashboard(ctx context.Context, b *tele.Bot, chatID int
 			go func() {
 				_, err := b.Send(&tele.Chat{ID: chatID}, i18n.T(lang, "pin_help"))
 				if err != nil {
-					log.Printf("dashboard: chat %d: подсказка о закрепе не отправлена: %v", chatID, err)
+					log.Printf("dashboard: chat %d: pin hint not sent: %v", chatID, err)
 				}
 			}()
 		}
@@ -484,17 +484,17 @@ func (d *Dashboard) updateOwnerPMDashboard(ctx context.Context, b *tele.Bot, own
 
 	msg, err := b.Send(&tele.Chat{ID: owner.UserID}, text)
 	if err != nil {
-		log.Printf("dashboard: owner %d: PM-дашборд не отправлен: %v", owner.UserID, err)
+		log.Printf("dashboard: owner %d: PM dashboard not sent: %v", owner.UserID, err)
 		return
 	}
 	pinnedOK := true
 	if err := b.Pin(msg, tele.Silent); err != nil {
-		log.Printf("dashboard: owner %d: PM-дашборд не закреплён: %v", owner.UserID, err)
+		log.Printf("dashboard: owner %d: PM dashboard not pinned: %v", owner.UserID, err)
 		pinnedOK = false
 	}
 	_ = d.db.SetOwnerPmPinned(owner.UserID, int64(msg.ID))
 	if pinnedOK {
-		log.Printf("dashboard: owner %d: PM-дашборд создан и закреплён (msg %d)", owner.UserID, msg.ID)
+		log.Printf("dashboard: owner %d: PM dashboard created and pinned (msg %d)", owner.UserID, msg.ID)
 	}
 }
 
@@ -502,7 +502,7 @@ func (d *Dashboard) updateOwnerPMDashboard(ctx context.Context, b *tele.Bot, own
 func (d *Dashboard) UpdateDashboards(ctx context.Context, b *tele.Bot) {
 	owners, err := d.db.GetAllOwners()
 	if err != nil {
-		log.Printf("dashboard: владельцы не получены: %v", err)
+		log.Printf("dashboard: owners not fetched: %v", err)
 		return
 	}
 	for _, owner := range owners {
@@ -534,10 +534,10 @@ func (d *Dashboard) UpdateDashboards(ctx context.Context, b *tele.Bot) {
 				}
 				d.mu.Unlock()
 				if wasOnline {
-					log.Printf("dashboard: сервер %d (%s) ушёл в оффлайн", s.ID, s.ServerIP)
+					log.Printf("dashboard: server %d (%s) went offline", s.ID, s.ServerIP)
 					d.notifyServerOffline(b, s)
 				} else {
-					log.Printf("dashboard: сервер %d (%s) вышел онлайн", s.ID, s.ServerIP)
+					log.Printf("dashboard: server %d (%s) came online", s.ID, s.ServerIP)
 				}
 			} else {
 				d.mu.Unlock()
@@ -578,7 +578,7 @@ func (d *Dashboard) notifyServerOffline(b *tele.Bot, s *database.Server) {
 		text := i18n.T(d.chatLang(ch.ChatID), "srv_offline_notify", html.EscapeString(name))
 		msg, err := b.Send(&tele.Chat{ID: ch.ChatID}, text)
 		if err != nil {
-			log.Printf("dashboard: уведомление об оффлайне сервера %d в чат %d не отправлено: %v",
+			log.Printf("dashboard: offline notification for server %d not sent to chat %d: %v",
 				s.ID, ch.ChatID, err)
 			continue
 		}
@@ -659,7 +659,7 @@ func (d *Dashboard) notifyPlayers(b *tele.Bot, s *database.Server, current []str
 		for _, text := range texts {
 			msg, err := b.Send(&tele.Chat{ID: ch.ChatID}, text)
 			if err != nil {
-				log.Printf("dashboard: уведомление об игроках сервера %d в чат %d не отправлено: %v",
+				log.Printf("dashboard: player notification for server %d not sent to chat %d: %v",
 					s.ID, ch.ChatID, err)
 				continue
 			}
@@ -720,7 +720,7 @@ func (d *Dashboard) CheckAllSessions(ctx context.Context, b *tele.Bot) {
 			}
 			_, err := b.Send(&tele.Chat{ID: uid}, i18n.T(lang, "cookie_expired_pm"))
 			if err != nil {
-				log.Printf("dashboard: owner %d: уведомление о куке не отправлено: %v", uid, err)
+				log.Printf("dashboard: owner %d: cookie notification not sent: %v", uid, err)
 			}
 			continue
 		}
