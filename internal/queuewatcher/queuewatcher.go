@@ -1,9 +1,9 @@
 // Package queuewatcher — наблюдатель очереди запуска Aternos (порт queue_watcher.py).
 //
-// После server.start(), если сервер попал в очередь, фоновая задача каждые
-// 15 секунд опрашивает статус панели и, когда сервер доходит до состояния
-// «ожидает подтверждения» (lang содержит "confirm"), автоматически вызывает
-// confirm. По ходу обновляет дашборды с позицией в очереди.
+// После server.start() фоновая задача каждые 15 секунд опрашивает статус
+// панели и автоматически подтверждает запуск: по явному сигналу lang=="confirm"
+// и дополнительно «вслепую» каждые 45 секунд (confirm идемпотентен). Когда
+// сервер выходит онлайн — наблюдатель уведомляет чаты и завершается.
 package queuewatcher
 
 import (
@@ -24,12 +24,11 @@ import (
 )
 
 const (
-	pollInterval       = 15 * time.Second
-	idleTimeout        = 15 * time.Minute
-	maxFailures        = 5
-	dashboardPeriod    = 30 * time.Second
-	autoConfirmInterval = 60 * time.Second
-	autoConfirmWindow   = 15 * time.Minute
+	pollInterval         = 15 * time.Second
+	idleTimeout          = 20 * time.Minute
+	maxFailures          = 5
+	dashboardPeriod      = 30 * time.Second
+	blindConfirmInterval = 45 * time.Second
 )
 
 // Watcher — реестр активных наблюдателей.
@@ -59,8 +58,9 @@ func (w *Watcher) IsWatching(serverID int64) bool {
 	return w.active[serverID]
 }
 
-// Start запускает фонового наблюдателя очереди (если ещё не запущен),
-// а также фоновый цикл автоподтверждения запуска.
+// Start запускает ЕДИНЫЙ фоновый наблюдатель очереди (если ещё не запущен):
+// опрос панели каждые 15 секунд, автоподтверждение при lang=="confirm"
+// плюс слепой Confirm каждые 45 секунд, пока сервер не вышел онлайн.
 func (w *Watcher) Start(b *tele.Bot, ownerID, serverID int64) {
 	w.mu.Lock()
 	if w.active[serverID] {
@@ -70,43 +70,6 @@ func (w *Watcher) Start(b *tele.Bot, ownerID, serverID int64) {
 	w.active[serverID] = true
 	w.mu.Unlock()
 	go w.watchLoop(b, ownerID, serverID)
-	w.StartAutoConfirm(ownerID, serverID)
-}
-
-// StartAutoConfirm запускает фоновый Auto-Confirm Loop: после старта сервера
-// каждые 60 секунд отправляет запрос на подтверждение в Aternos на протяжении
-// 15 минут (или пока статус не станет Онлайн). Ошибки в цикле игнорируются.
-func (w *Watcher) StartAutoConfirm(ownerID, serverID int64) {
-	go w.autoConfirmLoop(ownerID, serverID)
-}
-
-func (w *Watcher) autoConfirmLoop(ownerID, serverID int64) {
-	defer func() {
-		if r := recover(); r != nil {
-			log.Printf("auto-confirm loop %d: panic: %v", serverID, r)
-		}
-	}()
-	manager := w.managers.For(ownerID)
-	deadline := time.Now().Add(autoConfirmWindow)
-	for time.Now().Before(deadline) {
-		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-		status, err := manager.FetchInfo(ctx, serverID)
-		cancel()
-		if err == nil && status != nil {
-			lang := strings.ToLower(status.Lang)
-			if status.Status == 1 || lang == "on" || lang == "online" {
-				log.Printf("auto-confirm: сервер %d онлайн, цикл завершён", serverID)
-				return
-			}
-		}
-		// Подтверждаем очередь — ошибки игнорируем.
-		cctx, ccancel := context.WithTimeout(context.Background(), 45*time.Second)
-		_ = manager.ConfirmServer(cctx, serverID)
-		ccancel()
-		log.Printf("auto-confirm: сервер %d — отправлен запрос на подтверждение", serverID)
-		time.Sleep(autoConfirmInterval)
-	}
-	log.Printf("auto-confirm: сервер %d — цикл завершён по таймауту (15 мин)", serverID)
 }
 
 // Rescan запускает наблюдение за всеми активными серверами, которые уже
@@ -154,6 +117,7 @@ func (w *Watcher) watchLoop(b *tele.Bot, ownerID, serverID int64) {
 	manager := w.managers.For(ownerID)
 	failures := 0
 	lastDashUpdate := time.Time{}
+	lastBlindConfirm := time.Time{}
 	// inactiveSince — когда сервер последний раз был в «неактивном» состоянии
 	// (не в очереди и не грузится). Если он так и не запустился в течение
 	// idleTimeout — считаем запуск проваленным и уведомляем владельца.
@@ -176,23 +140,35 @@ func (w *Watcher) watchLoop(b *tele.Bot, ownerID, serverID int64) {
 		}
 		failures = 0
 
-		serverLang := status.Lang
+		serverLang := strings.ToLower(status.Lang)
 		queueValue := parseQueue(status.Queue)
-		log.Printf("queuewatcher: сервер %d: status=%d lang=%q queue=%v",
-			serverID, status.Status, serverLang, status.Queue)
+
+		// Сервер вышел онлайн (status==1 или lang on/online) — уведомляем чаты
+		// и завершаем наблюдение.
+		if status.Status == 1 || serverLang == "on" || serverLang == "online" {
+			log.Printf("queuewatcher: сервер %d: онлайн, watcher завершён", serverID)
+			if p := util.ToInt(status.Port); p > 0 {
+				_ = w.db.SetServerPort(serverID, p)
+			}
+			w.dash.ClearQueuePosition(serverID)
+			w.refreshDashboard(b, serverID)
+			w.notifyServerOnline(b, serverID, status)
+			return
+		}
 
 		// active — сервер в состоянии, когда запуск ещё в процессе
 		// (очередь идёт, сервер грузится или просит подтверждение).
 		active := false
 
-		// Aternos просит подтверждение запуска — ТОЛЬКО при явном сигнале.
-		if strings.Contains(strings.ToLower(serverLang), "confirm") {
+		// Aternos просит подтверждение запуска — подтверждаем сразу.
+		if strings.Contains(serverLang, "confirm") {
 			active = true
 			// Свежий контекст: предыдущий уже отменён (cancel() после FetchInfo),
 			// иначе ConfirmServer сразу упадёт с context canceled.
 			cctx, ccancel := context.WithTimeout(context.Background(), 45*time.Second)
 			err := manager.ConfirmServer(cctx, serverID)
 			ccancel()
+			lastBlindConfirm = time.Now()
 			if err != nil {
 				log.Printf("queuewatcher: сервер %d: confirm не удался (lang=%q): %v — ждём итерации",
 					serverID, serverLang, err)
@@ -203,6 +179,16 @@ func (w *Watcher) watchLoop(b *tele.Bot, ownerID, serverID int64) {
 			}
 			time.Sleep(pollInterval)
 			continue
+		}
+
+		// Слепой Confirm каждые 45 секунд: Aternos не всегда успевает
+		// обновить lang, а confirm API идемпотентен — лишний запрос не вредит.
+		if time.Since(lastBlindConfirm) >= blindConfirmInterval {
+			cctx, ccancel := context.WithTimeout(context.Background(), 45*time.Second)
+			_ = manager.ConfirmServer(cctx, serverID)
+			ccancel()
+			lastBlindConfirm = time.Now()
+			log.Printf("queuewatcher: сервер %d: слепой confirm отправлен", serverID)
 		}
 
 		switch serverLang {
@@ -220,14 +206,6 @@ func (w *Watcher) watchLoop(b *tele.Bot, ownerID, serverID int64) {
 		case "loading", "starting":
 			active = true
 			log.Printf("queuewatcher: сервер %d: грузится (lang=%q), ждём запуска", serverID, serverLang)
-		case "on", "online":
-			log.Printf("queuewatcher: сервер %d: онлайн, watcher завершён", serverID)
-			if p := util.ToInt(status.Port); p > 0 {
-				_ = w.db.SetServerPort(serverID, p)
-			}
-			w.dash.ClearQueuePosition(serverID)
-			w.refreshDashboard(b, serverID)
-			return
 		default:
 			log.Printf("queuewatcher: сервер %d: состояние lang=%q, ждём итерации", serverID, serverLang)
 		}
@@ -238,7 +216,7 @@ func (w *Watcher) watchLoop(b *tele.Bot, ownerID, serverID int64) {
 			inactiveSince = time.Now()
 		} else if time.Since(inactiveSince) >= idleTimeout {
 			w.dash.ClearQueuePosition(serverID)
-			w.notifyOwner(b, ownerID, serverID, "сервер не запустился (15 минут вне очереди)")
+			w.notifyOwner(b, ownerID, serverID, "сервер не запустился (20 минут вне очереди)")
 			w.refreshDashboard(b, serverID)
 			return
 		}
@@ -324,6 +302,44 @@ func (w *Watcher) refreshDashboard(b *tele.Bot, serverID int64) {
 	}
 	if len(chats) > 0 {
 		w.dash.UpdateDashboards(context.Background(), b)
+	}
+}
+
+// notifyServerOnline шлёт во все привязанные чаты сервера временное
+// уведомление «сервер запущен» (удаляется через 60 секунд).
+func (w *Watcher) notifyServerOnline(b *tele.Bot, serverID int64, status *aternos.ServerInfo) {
+	server, err := w.db.GetServer(serverID)
+	if err != nil || server == nil {
+		return
+	}
+	name := server.DisplayName
+	if name == "" {
+		name = fmt.Sprintf("ID %d", serverID)
+	}
+	ip := server.ServerIP
+	if ip == "" {
+		ip = util.ToStr(status.IP)
+	}
+	if ip == "" {
+		ip = "Не указан"
+	}
+	text := fmt.Sprintf("🟢 <b>%s</b> запущен и готов к игре!\n🌐 IP: <code>%s</code>",
+		html.EscapeString(name), html.EscapeString(ip))
+	chats, err := w.db.GetChatsForServer(serverID)
+	if err != nil {
+		return
+	}
+	for _, ch := range chats {
+		msg, err := b.Send(&tele.Chat{ID: ch.ChatID}, text)
+		if err != nil {
+			log.Printf("queuewatcher: уведомление об онлайне сервера %d в чат %d не отправлено: %v",
+				serverID, ch.ChatID, err)
+			continue
+		}
+		go func(m *tele.Message) {
+			time.Sleep(60 * time.Second)
+			_ = b.Delete(m)
+		}(msg)
 	}
 }
 

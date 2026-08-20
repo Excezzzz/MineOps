@@ -14,8 +14,8 @@ type Registry struct {
 	db         *database.DB
 	httpClient *http.Client
 
-	mu      sync.Mutex
-	byOwner map[int64]*Manager
+	mu       sync.Mutex
+	byOwner  map[int64]*Manager
 	authHook AuthFailureHook
 }
 
@@ -23,11 +23,11 @@ type Registry struct {
 // ошибок аутентификации Aternos.
 func NewRegistry(db *database.DB, httpClient *http.Client) *Registry {
 	r := &Registry{
-		db:         db,
-		byOwner:    make(map[int64]*Manager),
+		db:      db,
+		byOwner: make(map[int64]*Manager),
 	}
 	r.httpClient = &http.Client{
-		Timeout:   httpClient.Timeout,
+		Timeout: httpClient.Timeout,
 		Transport: &authInterceptor{
 			base:   effectiveTransport(httpClient.Transport),
 			notify: func(ownerID int64) { r.notifyAuth(ownerID) },

@@ -28,8 +28,8 @@ type Manager struct {
 }
 
 const (
-	clientTTL    = 30 * time.Minute // TTL кеша сессий
-	cfCooldown   = 5 * time.Minute  // пауза после Cloudflare-бана
+	clientTTL  = 30 * time.Minute // TTL кеша сессий
+	cfCooldown = 5 * time.Minute  // пауза после Cloudflare-бана
 )
 
 // NewManager создаёт менеджер для владельца (общий http.Client разделяется).

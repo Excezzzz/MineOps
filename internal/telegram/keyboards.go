@@ -16,19 +16,19 @@ import (
 // Префиксы callback-данных (формат aiogram: "prefix:field1:field2",
 // bool-поля кодируются как "True"/"False" — совместимо со старыми кнопками).
 const (
-	cbPanel       = "panel"         // panel:<action>
-	cbPanelServer = "psrv"          // psrv:<server_id>
-	cbPanelAction = "pact"          // pact:<server_id>:<action>
-	cbPanelChat   = "pchat"         // pchat:<chat_id>:<action>
-	cbPanelChatS  = "pcsrv"         // pcsrv:<chat_id>:<server_id>:<action>
-	cbUsersPage   = "upage"         // upage:<chat_id>:<page>
-	cbOwnerSet    = "oset"          // oset:<action>:<enabled True/False>
-	cbDeleteAcc   = "delacc"        // delacc:<confirm True/False>
-	cbServer      = "srv"           // srv:<server_id>:<action>
-	cbReqAccess   = "req_acc"       // req_acc:<chat_id>
-	cbApproveAcc  = "app_acc"       // app_acc:<user_id>:<chat_id>:<approve True/False>
-	cbRunSrv      = "run_srv"       // run_srv:<server_id>:<chat_id> — выбор сервера для /run
-	cbOnboarding  = "onb"           // onb:<action>:<aternos_id>
+	cbPanel       = "panel"   // panel:<action>
+	cbPanelServer = "psrv"    // psrv:<server_id>
+	cbPanelAction = "pact"    // pact:<server_id>:<action>
+	cbPanelChat   = "pchat"   // pchat:<chat_id>:<action>
+	cbPanelChatS  = "pcsrv"   // pcsrv:<chat_id>:<server_id>:<action>
+	cbUsersPage   = "upage"   // upage:<chat_id>:<page>
+	cbOwnerSet    = "oset"    // oset:<action>:<enabled True/False>
+	cbDeleteAcc   = "delacc"  // delacc:<confirm True/False>
+	cbServer      = "srv"     // srv:<server_id>:<action>
+	cbReqAccess   = "req_acc" // req_acc:<chat_id>
+	cbApproveAcc  = "app_acc" // app_acc:<user_id>:<chat_id>:<approve True/False>
+	cbRunSrv      = "run_srv" // run_srv:<server_id>:<chat_id> — выбор сервера для /run
+	cbOnboarding  = "onb"     // onb:<action>:<aternos_id>
 	cbRefreshDash = "refresh_dashboard"
 	cbNoop        = "noop"
 )
@@ -256,12 +256,6 @@ func dashboardKB(servers []dashboard.DashServer, chatID int64) *tele.ReplyMarkup
 	return &tele.ReplyMarkup{InlineKeyboard: rows}
 }
 
-func requestAccessKB(chatID int64) *tele.ReplyMarkup {
-	return &tele.ReplyMarkup{InlineKeyboard: [][]tele.InlineButton{
-		{{Text: "🙋 Запросить доступ", Data: cbData(cbReqAccess, strconv.FormatInt(chatID, 10))}},
-	}}
-}
-
 func approveAccessKB(userID, chatID int64) *tele.ReplyMarkup {
 	return &tele.ReplyMarkup{InlineKeyboard: [][]tele.InlineButton{
 		{
@@ -293,9 +287,28 @@ func runServerPickerKB(servers []*database.Server, chatID int64) *tele.ReplyMark
 // онбординг
 // ------------------------------------------------------------------ //
 
-func serverPickerKB(servers []aternos.ServerBrief, selected map[string]bool) *tele.ReplyMarkup {
-	rows := make([][]tele.InlineButton, 0, len(servers)+1)
-	for _, s := range servers {
+const onbPageSize = 8
+
+// serverPickerKB — чекбоксы выбора серверов с пагинацией (по 8 на страницу).
+func serverPickerKB(servers []aternos.ServerBrief, selected map[string]bool, page int) *tele.ReplyMarkup {
+	total := len(servers)
+	pages := (total + onbPageSize - 1) / onbPageSize
+	if pages < 1 {
+		pages = 1
+	}
+	if page < 0 {
+		page = 0
+	}
+	if page >= pages {
+		page = pages - 1
+	}
+	start := page * onbPageSize
+	end := start + onbPageSize
+	if end > total {
+		end = total
+	}
+	rows := make([][]tele.InlineButton, 0, onbPageSize+2)
+	for _, s := range servers[start:end] {
 		name := s.DisplayName
 		if name == "" {
 			name = "ID " + s.AternosID
@@ -308,6 +321,25 @@ func serverPickerKB(servers []aternos.ServerBrief, selected map[string]bool) *te
 			Text: checked + " " + btnName(name),
 			Data: cbData(cbOnboarding, "toggle", s.AternosID),
 		}})
+	}
+	if total > onbPageSize {
+		nav := []tele.InlineButton{}
+		if page > 0 {
+			nav = append(nav, tele.InlineButton{
+				Text: "⬅️",
+				Data: cbData(cbOnboarding, "page", strconv.Itoa(page-1)),
+			})
+		}
+		nav = append(nav, tele.InlineButton{
+			Text: fmt.Sprintf("%d/%d", page+1, pages), Data: cbNoop,
+		})
+		if end < total {
+			nav = append(nav, tele.InlineButton{
+				Text: "➡️",
+				Data: cbData(cbOnboarding, "page", strconv.Itoa(page+1)),
+			})
+		}
+		rows = append(rows, nav)
 	}
 	rows = append(rows, []tele.InlineButton{{
 		Text: fmt.Sprintf("Готово (%d)", len(selected)),

@@ -1,15 +1,15 @@
 // Package aternos — минималистичный HTTP-клиент Aternos (Go-порт python-aternos 3.0.6).
 //
 // Реверс-инжиниринг протокола:
-//   * AJAX_TOKEN вычисляется JavaScript-кодом со страницы https://aternos.org/go/
+//   - AJAX_TOKEN вычисляется JavaScript-кодом со страницы https://aternos.org/go/
 //     (функция `(() => {...})();` выполняется встроенным JS-движком goja с теми же
 //     стабами окружения, что js2py в Python-версии);
-//   * SEC генерируется клиентом: `ключ:значение` (11 символов [a-z0-9] + "00000")
+//   - SEC генерируется клиентом: `ключ:значение` (11 символов [a-z0-9] + "00000")
 //     плюс кука ATERNOS_SEC_<ключ>=<значение>;
-//   * запросы к /ajax/server/<action> отправляются с куками ATERNOS_SESSION,
+//   - запросы к /ajax/server/<action> отправляются с куками ATERNOS_SESSION,
 //     ATERNOS_SEC_<ключ>, ATERNOS_SERVER=<servid> и параметрами TOKEN/SEC;
-//   * статус сервера берётся из JSON `var lastStatus = {...};` на странице /server;
-//   * список серверов — с /servers/ (div.server-body, атрибут data-id); редирект
+//   - статус сервера берётся из JSON `var lastStatus = {...};` на странице /server;
+//   - список серверов — с /servers/ (div.server-body, атрибут data-id); редирект
 //     на /go/ означает, что кука истекла.
 package aternos
 
@@ -42,8 +42,8 @@ const (
 		"Подождите 3-5 минут или обновите куку /set_session."
 	msgSessionExpired = "⚠️ Сессия Aternos истекла или недействительна!\n" +
 		"Обновите куку командой /set_session в личке с ботом."
-	msgOwnerNotFound = "Владелец не найден: пройдите онбординг заново."
-	msgSessionNotSet = "Сессия Aternos не настроена: выполните /set_session."
+	msgOwnerNotFound  = "Владелец не найден: пройдите онбординг заново."
+	msgSessionNotSet  = "Сессия Aternos не настроена: выполните /set_session."
 	msgServerNotFound = "Сервер не найден или не принадлежит владельцу."
 )
 
@@ -220,8 +220,8 @@ func genSecPart() string {
 // ------------------------------------------------------------------ //
 
 const (
-	baseURL    = "https://aternos.org"
-	requestUA  = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 " +
+	baseURL   = "https://aternos.org"
+	requestUA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 " +
 		"(KHTML, like Gecko) Chrome/99.0.4844.84 Safari/537.36 OPR/85.0.4341.47"
 	maxRetries   = 5
 	requestTO    = 15 * time.Second
@@ -232,11 +232,11 @@ const (
 // Session — состояние авторизации одного владельца.
 type Session struct {
 	httpClient *http.Client
-	SessionID  string            // ATERNOS_SESSION
-	Token      string            // AJAX_TOKEN
-	secKey     string            // ATERNOS_SEC_<key> (имя куки)
-	secVal     string            // значение куки ATERNOS_SEC_<key>
-	expiresAt  time.Time         // истечение кеша клиента
+	SessionID  string    // ATERNOS_SESSION
+	Token      string    // AJAX_TOKEN
+	secKey     string    // ATERNOS_SEC_<key> (имя куки)
+	secVal     string    // значение куки ATERNOS_SEC_<key>
+	expiresAt  time.Time // истечение кеша клиента
 }
 
 var lastStatusRe = regexp.MustCompile(`(?s)<script>\s*var lastStatus\s*?=\s*?(\{.+?\});?\s*</script>`)
@@ -274,7 +274,7 @@ func (s *Session) request(ctx context.Context, method, path string,
 	}
 
 	allCookies := map[string]string{
-		"ATERNOS_SESSION":    s.SessionID,
+		"ATERNOS_SESSION":         s.SessionID,
 		"ATERNOS_SEC_" + s.secKey: s.secVal,
 	}
 	for k, v := range cookies {

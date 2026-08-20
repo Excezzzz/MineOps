@@ -3,6 +3,7 @@ package telegram
 import (
 	"context"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
@@ -66,12 +67,13 @@ func (bot *Bot) onSessionCookie(c tele.Context) {
 	bot.fsm.SetData(m.Sender.ID, "cookie", cookie)
 	bot.fsm.SetData(m.Sender.ID, "servers", servers)
 	bot.fsm.SetData(m.Sender.ID, "selected", map[string]bool{})
+	bot.fsm.SetData(m.Sender.ID, "page", 0)
 	_, _ = bot.b.Edit(statusMsg,
 		"✅ Сессия действительна! Выберите серверы для управления:",
-		serverPickerKB(servers, map[string]bool{}))
+		serverPickerKB(servers, map[string]bool{}, 0))
 }
 
-// cbOnboarding — чекбоксы выбора серверов и кнопка «Готово».
+// cbOnboarding — чекбоксы выбора серверов, пагинация и кнопка «Готово».
 func (bot *Bot) cbOnboarding(c tele.Context, parts []string) error {
 	cb := c.Callback()
 	if cb == nil || cb.Message == nil || cb.Sender == nil {
@@ -79,10 +81,14 @@ func (bot *Bot) cbOnboarding(c tele.Context, parts []string) error {
 	}
 	bot.answer(c, "", false)
 	action := cbStr(parts, 1)
+	uid := cb.Sender.ID
+
+	pageAny, _ := bot.fsm.GetData(uid, "page")
+	page, _ := pageAny.(int)
 
 	if action == "toggle" {
 		sid := cbStr(parts, 2)
-		data, ok := bot.fsm.GetData(cb.Sender.ID, "servers")
+		data, ok := bot.fsm.GetData(uid, "servers")
 		if !ok {
 			return c.Respond(&tele.CallbackResponse{})
 		}
@@ -90,7 +96,7 @@ func (bot *Bot) cbOnboarding(c tele.Context, parts []string) error {
 		if !ok {
 			return c.Respond(&tele.CallbackResponse{})
 		}
-		selAny, _ := bot.fsm.GetData(cb.Sender.ID, "selected")
+		selAny, _ := bot.fsm.GetData(uid, "selected")
 		selected, ok := selAny.(map[string]bool)
 		if !ok {
 			return c.Respond(&tele.CallbackResponse{})
@@ -101,14 +107,38 @@ func (bot *Bot) cbOnboarding(c tele.Context, parts []string) error {
 		} else {
 			selected[sid] = true
 		}
-		bot.fsm.SetData(cb.Sender.ID, "selected", selected)
+		bot.fsm.SetData(uid, "selected", selected)
 		_ = bot.edit(cb.Message, "✅ Сессия действительна! Выберите серверы:",
-			serverPickerKB(servers, selected))
+			serverPickerKB(servers, selected, page))
+		return nil
+	}
+
+	if action == "page" {
+		newPage := 0
+		if n, err := strconv.Atoi(cbStr(parts, 2)); err == nil {
+			newPage = n
+		}
+		data, ok := bot.fsm.GetData(uid, "servers")
+		if !ok {
+			return c.Respond(&tele.CallbackResponse{})
+		}
+		servers, ok := data.([]aternos.ServerBrief)
+		if !ok {
+			return c.Respond(&tele.CallbackResponse{})
+		}
+		selAny, _ := bot.fsm.GetData(uid, "selected")
+		selected, ok := selAny.(map[string]bool)
+		if !ok {
+			return c.Respond(&tele.CallbackResponse{})
+		}
+		bot.fsm.SetData(uid, "page", newPage)
+		_ = bot.edit(cb.Message, "✅ Сессия действительна! Выберите серверы:",
+			serverPickerKB(servers, selected, newPage))
 		return nil
 	}
 
 	if action == "done" {
-		selAny, _ := bot.fsm.GetData(cb.Sender.ID, "selected")
+		selAny, _ := bot.fsm.GetData(uid, "selected")
 		selected, ok := selAny.(map[string]bool)
 		if !ok {
 			bot.answer(c, "Сессия устарела — начните заново /start.", false)
@@ -118,17 +148,16 @@ func (bot *Bot) cbOnboarding(c tele.Context, parts []string) error {
 			bot.answer(c, "Выберите хотя бы один сервер.", false)
 			return nil
 		}
-		cookieAny, ok := bot.fsm.GetData(cb.Sender.ID, "cookie")
+		cookieAny, ok := bot.fsm.GetData(uid, "cookie")
 		if !ok {
 			bot.answer(c, "Сессия устарела — начните заново /start.", false)
 			return nil
 		}
 		cookie := cookieAny.(string)
-		serversAny, _ := bot.fsm.GetData(cb.Sender.ID, "servers")
+		serversAny, _ := bot.fsm.GetData(uid, "servers")
 		servers := serversAny.([]aternos.ServerBrief)
 
 		_ = bot.edit(cb.Message, "💾 Сохраняю аккаунт...", nil)
-		uid := cb.Sender.ID
 		if err := bot.db.CreateOwner(uid,
 			cb.Sender.Username, cb.Sender.FirstName+" "+cb.Sender.LastName,
 			crypto.EncryptSession(cookie)); err != nil {

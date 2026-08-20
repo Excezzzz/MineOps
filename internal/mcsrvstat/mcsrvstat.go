@@ -32,13 +32,13 @@ type Status struct {
 }
 
 const (
-	apiURL           = "https://api.mcsrvstat.us/3/%s"
-	mcstatusURL      = "https://api.mcstatus.io/v2/status/java/%s"
-	legacyPingTO     = 5 * time.Second
-	modernSLPTO      = 4 * time.Second
-	requestTO        = 7 * time.Second
-	playersListTO    = 8 * time.Second
-	httpUA           = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" +
+	apiURL        = "https://api.mcsrvstat.us/3/%s"
+	mcstatusURL   = "https://api.mcstatus.io/v2/status/java/%s"
+	legacyPingTO  = 5 * time.Second
+	modernSLPTO   = 4 * time.Second
+	requestTO     = 7 * time.Second
+	playersListTO = 8 * time.Second
+	httpUA        = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" +
 		" (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
 )
 

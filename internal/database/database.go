@@ -33,15 +33,15 @@ type Owner struct {
 
 // Server — сервер Aternos владельца.
 type Server struct {
-	ID           int64
-	OwnerID      int64
-	AternosID    string
-	ServerIP     string
-	DisplayName  string
-	IsActive     bool
-	AutoBackupH  int
-	AutoConfirm  bool
-	CreatedAt    string
+	ID          int64
+	OwnerID     int64
+	AternosID   string
+	ServerIP    string
+	DisplayName string
+	IsActive    bool
+	AutoBackupH int
+	AutoConfirm bool
+	CreatedAt   string
 }
 
 // Chat — привязанный к владельцу групповой чат.
@@ -401,8 +401,8 @@ func (d *DB) GetOwner(userID int64) (*Owner, error) {
 // GetAllOwners возвращает всех владельцев.
 func (d *DB) GetAllOwners() ([]*Owner, error) {
 	rows, err := d.db.Query(
-		"SELECT user_id, username, full_name, aternos_session, session_valid,"+
-			" max_servers, lockdown_mode, created_at, updated_at, pm_pinned_msg_id"+
+		"SELECT user_id, username, full_name, aternos_session, session_valid," +
+			" max_servers, lockdown_mode, created_at, updated_at, pm_pinned_msg_id" +
 			" FROM owners ORDER BY created_at")
 	if err != nil {
 		return nil, err
@@ -873,6 +873,19 @@ func (d *DB) GetUserAccess(userID, chatID int64) (bool, error) {
 		return false, nil
 	}
 	return v != 0, err
+}
+
+// GetUserIDByUsername ищет user_id участника чата по username (без @).
+// Возвращает 0, если пользователь не найден (никогда не писал в чат).
+func (d *DB) GetUserIDByUsername(chatID int64, username string) (int64, error) {
+	var id int64
+	err := d.db.QueryRow(
+		"SELECT user_id FROM users WHERE chat_id = ? AND LOWER(username) = LOWER(?) LIMIT 1",
+		chatID, username).Scan(&id)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	return id, err
 }
 
 // SetUserAccess выдаёт/отзывает доступ в чате.

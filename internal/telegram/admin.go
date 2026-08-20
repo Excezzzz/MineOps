@@ -82,6 +82,7 @@ func (bot *Bot) cmdHelp(c tele.Context) error {
 					"/run — запустить все серверы\n"+
 					"/confirm — подтвердить очередь запуска\n"+
 					"/status — статус всех серверов\n"+
+					"/players — игроки онлайн\n"+
 					"/set_session — обновить куку Aternos\n"+
 					"/emergency — экстренный локдаун (права всем: OFF)\n\n"+
 					"<b>В группе:</b>\n"+
@@ -89,7 +90,10 @@ func (bot *Bot) cmdHelp(c tele.Context) error {
 					"/unlink — отвязать чат\n"+
 					"/run — запустить серверы чата\n"+
 					"/confirm — подтвердить очередь\n"+
-					"/status — статус серверов чата")
+					"/status — статус серверов чата\n"+
+					"/players — игроки онлайн\n"+
+					"/grant @username — выдать доступ (владелец)\n"+
+					"/revoke @username — забрать доступ (владелец)")
 			return err
 		}
 		return bot.cmdGroupHelp(c)

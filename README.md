@@ -1,6 +1,6 @@
 # ⛏️ MineOps
 
-> Self-hosted Telegram bot for managing Minecraft servers on [Aternos](https://aternos.org) — auto-start, live dashboard, queue auto-confirm, RBAC access control.
+> Self-hosted multi-tenant Telegram bot for managing Minecraft servers on [Aternos](https://aternos.org) — auto-start, live dashboard, queue auto-confirm, RBAC access control.
 
 ![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)
 ![License](https://img.shields.io/badge/License-AGPL--3.0-blue)

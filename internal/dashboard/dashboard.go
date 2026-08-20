@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"html"
 	"log"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -48,14 +49,15 @@ type Dashboard struct {
 	managers *aternos.Registry
 	kb       KBFactory
 
-	mu               sync.Mutex
-	startingUntil    time.Time
-	queuePositions   map[int64]int
-	panelCache       map[int64]panelEntry
-	panelFailUntil   map[int64]time.Time
-	pinNoticeSent    map[int64]bool
-	pinPending       map[int64]bool
-	sessionBroken    map[int64]bool
+	mu             sync.Mutex
+	startingUntil  time.Time
+	queuePositions map[int64]int
+	panelCache     map[int64]panelEntry
+	panelFailUntil map[int64]time.Time
+	pinNoticeSent  map[int64]bool
+	pinPending     map[int64]bool
+	sessionBroken  map[int64]bool
+	lastOnline     map[int64]bool
 }
 
 type panelEntry struct {
@@ -64,23 +66,24 @@ type panelEntry struct {
 }
 
 const (
-	panelTTL       = 60 * time.Second
-	panelFailCD    = 5 * time.Minute
-	playersLimit   = 20
+	panelTTL     = 60 * time.Second
+	panelFailCD  = 5 * time.Minute
+	playersLimit = 20
 )
 
 // New создаёт Dashboard. kb — фабрика клавиатуры дашборда.
 func New(db *database.DB, managers *aternos.Registry, kb KBFactory) *Dashboard {
 	return &Dashboard{
-		db:               db,
-		managers:         managers,
-		kb:               kb,
-		queuePositions:   make(map[int64]int),
-		panelCache:       make(map[int64]panelEntry),
-		panelFailUntil:   make(map[int64]time.Time),
-		pinNoticeSent:    make(map[int64]bool),
-		pinPending:       make(map[int64]bool),
-		sessionBroken:    make(map[int64]bool),
+		db:             db,
+		managers:       managers,
+		kb:             kb,
+		queuePositions: make(map[int64]int),
+		panelCache:     make(map[int64]panelEntry),
+		panelFailUntil: make(map[int64]time.Time),
+		pinNoticeSent:  make(map[int64]bool),
+		pinPending:     make(map[int64]bool),
+		sessionBroken:  make(map[int64]bool),
+		lastOnline:     make(map[int64]bool),
 	}
 }
 
@@ -136,7 +139,7 @@ func (d *Dashboard) queuePosition(serverID int64) int {
 // FormatDashboardText формирует единый дашборд (HTML).
 func (d *Dashboard) FormatDashboardText(servers []DashServer) string {
 	if len(servers) == 0 {
-		return "🔴 <b>В чате нет подключённых серверов.</b>\nВладелец: /link"
+		return "🔴 <b>В чате нет подключённых серверов.</b>\nВладелец: /link\n\n" + nowLabel()
 	}
 
 	blocks := make([]string, 0, len(servers))
@@ -188,7 +191,21 @@ func (d *Dashboard) FormatDashboardText(servers []DashServer) string {
 		lines = append(lines, "📦 Версия: "+html.EscapeString(version))
 		blocks = append(blocks, strings.Join(lines, "\n"))
 	}
-	return strings.Join(blocks, "\n\n")
+	return strings.Join(blocks, "\n\n") + "\n\n" + nowLabel()
+}
+
+// nowLabel — «🕐 Обновлено: HH:MM:SS TZ» (UTC или TZ из ENV).
+func nowLabel() string {
+	tz := os.Getenv("TZ")
+	loc := time.UTC
+	label := "UTC"
+	if tz != "" {
+		if l, err := time.LoadLocation(tz); err == nil {
+			loc = l
+			label = tz
+		}
+	}
+	return "🕐 Обновлено: " + time.Now().In(loc).Format("15:04:05") + " " + label
 }
 
 // ------------------------------------------------------------------ //
@@ -467,13 +484,11 @@ func (d *Dashboard) updateOwnerPMDashboard(ctx context.Context, b *tele.Bot, own
 
 // UpdateDashboards обновляет дашборды всех владельцев в их привязанных чатах.
 func (d *Dashboard) UpdateDashboards(ctx context.Context, b *tele.Bot) {
-	log.Printf("=== DASHBOARD TICK ===")
 	owners, err := d.db.GetAllOwners()
 	if err != nil {
 		log.Printf("dashboard: владельцы не получены: %v", err)
 		return
 	}
-	log.Printf("owners: %d", len(owners))
 	for _, owner := range owners {
 		servers, err := d.db.GetServersByOwner(owner.UserID)
 		if err != nil {
@@ -483,8 +498,6 @@ func (d *Dashboard) UpdateDashboards(ctx context.Context, b *tele.Bot) {
 		for _, s := range servers {
 			status := d.GetAuthoritativeStatus(ctx, owner.UserID, s)
 			statuses[s.ID] = status
-			log.Printf("server %s (id=%d): online=%v (players %d/%d)",
-				s.ServerIP, s.ID, status.IsOnline, status.PlayersOnline, status.PlayersMax)
 			if status.IsOnline {
 				d.ClearStarting()
 				d.ClearQueuePosition(s.ID)
@@ -492,6 +505,21 @@ func (d *Dashboard) UpdateDashboards(ctx context.Context, b *tele.Bot) {
 			knownPort, _ := d.db.GetServerPort(s.ID)
 			if status.IsOnline && status.Port > 0 && status.Port != knownPort {
 				_ = d.db.SetServerPort(s.ID, status.Port)
+			}
+			// Уведомление при переходе сервера в оффлайн (только смена статуса).
+			d.mu.Lock()
+			wasOnline := d.lastOnline[s.ID]
+			if wasOnline != status.IsOnline {
+				d.lastOnline[s.ID] = status.IsOnline
+				d.mu.Unlock()
+				if wasOnline {
+					log.Printf("dashboard: сервер %d (%s) ушёл в оффлайн", s.ID, s.ServerIP)
+					d.notifyServerOffline(b, s)
+				} else {
+					log.Printf("dashboard: сервер %d (%s) вышел онлайн", s.ID, s.ServerIP)
+				}
+			} else {
+				d.mu.Unlock()
 			}
 		}
 		chats, err := d.db.GetChatsByOwner(owner.UserID)
@@ -506,6 +534,32 @@ func (d *Dashboard) UpdateDashboards(ctx context.Context, b *tele.Bot) {
 			pmMerged = append(pmMerged, statuses[s.ID])
 		}
 		d.updateOwnerPMDashboard(ctx, b, owner, pmMerged)
+	}
+}
+
+// notifyServerOffline шлёт во все привязанные чаты сервера временное
+// уведомление «сервер ушёл в оффлайн» (удаляется через 60 секунд).
+func (d *Dashboard) notifyServerOffline(b *tele.Bot, s *database.Server) {
+	name := s.DisplayName
+	if name == "" {
+		name = fmt.Sprintf("ID %d", s.ID)
+	}
+	text := fmt.Sprintf("🔴 <b>%s</b> ушёл в оффлайн.", html.EscapeString(name))
+	chats, err := d.db.GetChatsForServer(s.ID)
+	if err != nil {
+		return
+	}
+	for _, ch := range chats {
+		msg, err := b.Send(&tele.Chat{ID: ch.ChatID}, text)
+		if err != nil {
+			log.Printf("dashboard: уведомление об оффлайне сервера %d в чат %d не отправлено: %v",
+				s.ID, ch.ChatID, err)
+			continue
+		}
+		go func(m *tele.Message) {
+			time.Sleep(60 * time.Second)
+			_ = b.Delete(m)
+		}(msg)
 	}
 }
 

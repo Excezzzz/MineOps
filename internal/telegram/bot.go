@@ -1,11 +1,9 @@
 package telegram
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"runtime/debug"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -118,12 +116,15 @@ func (bot *Bot) registerHandlers() {
 	b.Handle("/emergency", bot.cmdEmergency)
 	b.Handle("/announce", bot.cmdAnnounce)
 	b.Handle("/confirm", bot.cmdConfirm)
+	b.Handle("/players", bot.cmdPlayers)
 
-	// Группы: /link, /unlink, /status, /run
+	// Группы: /link, /unlink, /status, /run, /grant, /revoke
 	b.Handle("/link", bot.cmdLink)
 	b.Handle("/unlink", bot.cmdUnlink)
 	b.Handle("/status", bot.cmdStatus)
 	b.Handle("/run", bot.cmdRun)
+	b.Handle("/grant", bot.cmdGrant)
+	b.Handle("/revoke", bot.cmdRevoke)
 
 	// Текст (FSM: онбординг, обновление куки)
 	b.Handle(tele.OnText, bot.onText)
@@ -142,9 +143,12 @@ func (bot *Bot) setCommands() {
 		tele.Command{Text: "help", Description: "Справка"},
 		tele.Command{Text: "status", Description: "Статус серверов (группа / ЛС)"},
 		tele.Command{Text: "run", Description: "Запустить серверы (группа / ЛС)"},
+		tele.Command{Text: "players", Description: "Игроки онлайн (группа / ЛС)"},
 		tele.Command{Text: "confirm", Description: "Подтвердить очередь запуска"},
 		tele.Command{Text: "link", Description: "Привязать чат (в группе, владелец)"},
 		tele.Command{Text: "unlink", Description: "Отвязать чат (в группе, владелец)"},
+		tele.Command{Text: "grant", Description: "Выдать доступ в чате (владелец)"},
+		tele.Command{Text: "revoke", Description: "Забрать доступ в чате (владелец)"},
 		tele.Command{Text: "set_session", Description: "Обновить куку Aternos"},
 		tele.Command{Text: "emergency", Description: "Локдаун вкл/выкл"},
 	)
@@ -155,9 +159,9 @@ func (bot *Bot) setCommands() {
 // ------------------------------------------------------------------ //
 
 // firewall — мидлварь доступа:
-//   * ЛС: публичный онбординг — любой пользователь может пройти /start,
+//   - ЛС: публичный онбординг — любой пользователь может пройти /start,
 //     добавить свои серверы Aternos и управлять ими (multi-tenant);
-//   * группы: привязанные к любому владельцу чаты работают в штатном режиме,
+//   - группы: привязанные к любому владельцу чаты работают в штатном режиме,
 //     права разруливаются через RBAC; прочее — игнор.
 func (bot *Bot) firewall(c tele.Context) bool {
 	if c.Message() == nil {
@@ -284,10 +288,6 @@ func isNoiseError(err error) bool {
 		return true
 	}
 	return false
-}
-
-func isPanicError(err error) bool {
-	return err != nil && strings.HasPrefix(err.Error(), "panic:")
 }
 
 // notifyOwnerError — отправка ошибки Владельцу в ЛС.
@@ -439,11 +439,4 @@ func decodeCookie(raw string) string {
 		return strings.TrimSpace(raw[idx+1:])
 	}
 	return raw
-}
-
-func chatIDStr(id int64) string { return strconv.FormatInt(id, 10) }
-
-// withTimeout — контекст с таймаутом для сетевых операций с Aternos.
-func (bot *Bot) withTimeout(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(ctx, d)
 }

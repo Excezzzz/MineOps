@@ -239,6 +239,156 @@ func (bot *Bot) cmdRun(c tele.Context) error {
 	})
 }
 
+// cmdPlayers — список игроков онлайн (ЛС / группа).
+func (bot *Bot) cmdPlayers(c tele.Context) error {
+	return bot.SafeCall(func() error {
+		m := c.Message()
+		if m == nil || m.Sender == nil {
+			return nil
+		}
+		uid := m.Sender.ID
+		chatID := m.Chat.ID
+
+		var ownerID int64
+		var servers []*database.Server
+
+		if bot.isPrivate(c) {
+			isOwner, _ := bot.db.IsOwner(uid)
+			if !isOwner {
+				_, err := bot.b.Send(m.Chat, "Сначала пройдите онбординг: /start.")
+				return err
+			}
+			ownerID = uid
+			servers, _ = bot.db.GetActiveServersByOwner(uid)
+		} else if bot.isGroup(c) {
+			if !bot.canManage(uid, chatID) {
+				_, err := bot.b.Send(m.Chat, "У вас нет доступа к серверам этого чата.")
+				return err
+			}
+			owner, err := bot.db.GetChatOwner(chatID)
+			if err != nil || owner == nil {
+				return nil
+			}
+			ownerID = owner.UserID
+			servers, _ = bot.db.GetChatServers(chatID)
+		} else {
+			return nil
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		var lines []string
+		for _, s := range servers {
+			st := bot.dash.GetAuthoritativeStatus(ctx, ownerID, s)
+			if !st.IsOnline || len(st.PlayerList) == 0 {
+				continue
+			}
+			name := s.DisplayName
+			if name == "" {
+				name = s.ServerIP
+			}
+			lines = append(lines,
+				"🖥 <b>"+html.EscapeString(name)+"</b>",
+				fmt.Sprintf("👥 Игроки (%d/%d):", st.PlayersOnline, st.PlayersMax))
+			for _, p := range st.PlayerList {
+				lines = append(lines, "• "+html.EscapeString(p))
+			}
+			lines = append(lines, "")
+		}
+		if len(lines) == 0 {
+			_, err := bot.b.Send(m.Chat, "На серверах нет игроков.")
+			return err
+		}
+		text := strings.TrimSpace(strings.Join(lines, "\n"))
+		_, err := bot.b.Send(m.Chat, text)
+		return err
+	})
+}
+
+// cmdGrant / cmdRevoke — выдача/отзыв доступа в группе (только владелец чата).
+func (bot *Bot) cmdGrant(c tele.Context) error {
+	return bot.SafeCall(func() error {
+		return bot.setAccessCmd(c, true)
+	})
+}
+
+func (bot *Bot) cmdRevoke(c tele.Context) error {
+	return bot.SafeCall(func() error {
+		return bot.setAccessCmd(c, false)
+	})
+}
+
+func (bot *Bot) setAccessCmd(c tele.Context, grant bool) error {
+	m := c.Message()
+	if m == nil || m.Sender == nil || !bot.isGroup(c) {
+		return nil
+	}
+	uid := m.Sender.ID
+	chatID := m.Chat.ID
+	isChatOwner, _ := bot.db.IsChatOwner(chatID, uid)
+	if !isChatOwner {
+		return nil // молча: только владелец чата
+	}
+
+	verb := "/grant"
+	if !grant {
+		verb = "/revoke"
+	}
+	usage := fmt.Sprintf("Использование: %s @username или %s user_id", verb, verb)
+
+	parts := strings.Fields(m.Text)
+	if len(parts) < 2 {
+		_, err := bot.b.Send(m.Chat, usage)
+		return err
+	}
+	raw := strings.TrimPrefix(parts[1], "@")
+	if raw == "" {
+		_, err := bot.b.Send(m.Chat, usage)
+		return err
+	}
+
+	var targetID int64
+	byUsername := strings.HasPrefix(parts[1], "@")
+	if !byUsername {
+		n, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || n <= 0 {
+			_, err := bot.b.Send(m.Chat, usage)
+			return err
+		}
+		targetID = n
+	} else {
+		id, err := bot.db.GetUserIDByUsername(chatID, raw)
+		if err != nil {
+			return nil
+		}
+		if id == 0 {
+			_, err := bot.b.Send(m.Chat,
+				"❌ Пользователь @"+html.EscapeString(raw)+" не найден. "+
+					"Пусть он напишет сообщение в этот чат (для регистрации), "+
+					"или укажите user_id напрямую: "+verb+" <code>123456789</code>")
+			return err
+		}
+		targetID = id
+	}
+
+	display := raw
+	if byUsername {
+		display = "@" + raw
+	}
+	if grant {
+		_ = bot.db.SetUserAccess(targetID, chatID, true)
+		_ = bot.db.LogAction(uid, "access_grant",
+			fmt.Sprintf("user %d (@%s)", targetID, raw), targetID, chatID, 0)
+		_, err := bot.b.Send(m.Chat, "✅ "+html.EscapeString(display)+" получил доступ к серверам.")
+		return err
+	}
+	_ = bot.db.SetUserAccess(targetID, chatID, false)
+	_ = bot.db.LogAction(uid, "access_revoke",
+		fmt.Sprintf("user %d (@%s)", targetID, raw), targetID, chatID, 0)
+	_, err := bot.b.Send(m.Chat, "🚫 "+html.EscapeString(display)+" больше не может управлять серверами.")
+	return err
+}
+
 // cmdConfirm — ручное подтверждение очереди запуска Aternos (ЛС / группа).
 func (bot *Bot) cmdConfirm(c tele.Context) error {
 	return bot.SafeCall(func() error {
@@ -380,7 +530,10 @@ func (bot *Bot) cmdGroupHelp(c tele.Context) error {
 					"/link — привязать чат (серверы выбираются в ЛС)\n"+
 					"/unlink — отвязать чат\n"+
 					"/status — статус серверов чата\n"+
+					"/players — игроки онлайн\n"+
 					"/run — запустить серверы чата\n"+
+					"/grant @username — выдать доступ\n"+
+					"/revoke @username — забрать доступ\n"+
 					"/emergency — локдаун (в ЛС с ботом)\n\n"+
 					"<b>Кнопки дашборда:</b>\n"+
 					"▶️ Старт · ⏹ Стоп · ✅ Подтвердить (появляется, когда сервер в очереди)\n"+
