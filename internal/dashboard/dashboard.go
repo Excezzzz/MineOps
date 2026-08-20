@@ -32,11 +32,11 @@ type DashServer struct {
 	PlayerList    []string
 	Version       string
 	Port          int
-	Starting      bool // в процессе запуска/в очереди — показывать «Подтвердить»
+	Starting      bool // starting or in queue — show "Confirm" button
 }
 
-// KBFactory создаёт клавиатуру дашборда для чата (инжектится из telegram,
-// чтобы избежать циклического импорта).
+// KBFactory builds the dashboard keyboard for a chat (injected from telegram
+// to avoid an import cycle).
 type KBFactory func(servers []DashServer, chatID int64, lang string) *tele.ReplyMarkup
 
 type Dashboard struct {
@@ -188,7 +188,7 @@ func (d *Dashboard) FormatDashboardText(servers []DashServer, lang string) strin
 	return strings.Join(blocks, "\n\n") + "\n\n" + nowLabel(lang)
 }
 
-// nowLabel — «🕐 Обновлено: HH:MM:SS TZ» (UTC или TZ из ENV).
+// nowLabel — "🕐 Updated: HH:MM:SS TZ" (UTC or TZ from ENV).
 func nowLabel(lang string) string {
 	tz := os.Getenv("TZ")
 	loc := time.UTC
@@ -207,8 +207,8 @@ func (d *Dashboard) ensureServerPort(ctx context.Context, ownerID, serverID int6
 	if err == nil && port > 0 && port != 25565 {
 		return port
 	}
-	// Берём из кеша панели (TTL 60с), а не прямым запросом — иначе каждый
-	// тик дашборда долбит /server на Aternos.
+	// Take from the panel cache (TTL 60s), not a direct request — otherwise
+	// every dashboard tick hammers /server on Aternos.
 	info := d.getPanelCached(ctx, ownerID, serverID)
 	if info != nil {
 		p := util.ToInt(info.Port)
@@ -232,7 +232,7 @@ func (d *Dashboard) getPanelCached(ctx context.Context, ownerID, serverID int64)
 	}
 	if failing && now.Before(failUntil) {
 		if hasCache {
-			return cached.info // устаревший кеш лучше, чем врущий legacy-пинг
+			return cached.info // stale cache beats a lying legacy ping
 		}
 		return nil
 	}
@@ -277,7 +277,7 @@ func panelToStatus(server *database.Server, panel *aternos.ServerInfo) DashServe
 	}
 }
 
-// Нужна кнопка «Подтвердить»: сервер запускается или стоит в очереди.
+// The "Confirm" button is needed: the server is starting or in queue.
 func (d *Dashboard) startingState(serverID int64, online bool) bool {
 	if online {
 		return false
@@ -285,7 +285,7 @@ func (d *Dashboard) startingState(serverID int64, online bool) bool {
 	return d.IsStarting() || d.queuePosition(serverID) > 0
 }
 
-// GetAuthoritativeStatus — панель Aternos, иначе честный mcsrvstat.
+// GetAuthoritativeStatus queries the Aternos panel, otherwise honest mcsrvstat.
 func (d *Dashboard) GetAuthoritativeStatus(ctx context.Context, ownerID int64, server *database.Server) DashServer {
 	if panel := d.getPanelCached(ctx, ownerID, server.ID); panel != nil {
 		st := panelToStatus(server, panel)
@@ -316,7 +316,7 @@ func (d *Dashboard) tryPin(b *tele.Bot, chatID int64, msg *tele.Message) bool {
 	return true
 }
 
-// pinIfNeeded закрепляет дашборд, если он ещё не закреплён (самовосстановление).
+// pinIfNeeded pins the dashboard if not pinned yet (self-healing).
 func (d *Dashboard) pinIfNeeded(b *tele.Bot, chatID int64, messageID int) bool {
 	chat, err := b.ChatByID(chatID)
 	if err == nil && chat.PinnedMessage != nil && chat.PinnedMessage.ID == messageID {
@@ -342,9 +342,9 @@ func (d *Dashboard) renderDashboard(ctx context.Context, b *tele.Bot, chatID int
 			log.Printf("dashboard: chat %d: edit failed (%v), will re-send", chatID, err)
 		} else {
 			d.pinState(chatID, !d.pinIfNeeded(b, chatID, int(pinnedMsgID)))
-			return // контент не изменился — дашборд актуален
+			return // content unchanged — dashboard is up to date
 		}
-		// Падаем вниз и пересоздаём сообщение.
+		// Fall through and recreate the message.
 	}
 
 	msg, err := b.Send(&tele.Chat{ID: chatID}, text, &tele.SendOptions{ParseMode: tele.ModeHTML, ReplyMarkup: kb})
@@ -354,7 +354,7 @@ func (d *Dashboard) renderDashboard(ctx context.Context, b *tele.Bot, chatID int
 	}
 	pinnedOK := d.tryPin(b, chatID, msg)
 
-	// id сохраняется всегда: при неудачном пине следующий тик правит новое сообщение.
+	// id is always kept: if pinning fails, the next tick fixes the new message.
 	_ = d.db.SetChatPinnedMsg(chatID, int64(msg.ID))
 
 	if pinnedOK {
@@ -393,7 +393,7 @@ func (d *Dashboard) pinState(chatID int64, pending bool) {
 func (d *Dashboard) updateChatDashboard(ctx context.Context, b *tele.Bot, chatID int64) {
 	servers, err := d.db.GetChatServers(chatID)
 	if err != nil || len(servers) == 0 {
-		return // владелец ещё не привязал серверы — дашборд не нужен
+		return // owner has not linked servers yet — no dashboard needed
 	}
 
 	for _, s := range servers {
@@ -441,7 +441,7 @@ func (d *Dashboard) updateOwnerPMDashboard(ctx context.Context, b *tele.Bot, own
 		msg := &tele.StoredMessage{MessageID: strconv.Itoa(int(pmPinned)), ChatID: owner.UserID}
 		_, err := b.Edit(msg, text)
 		if err == nil || err == tele.ErrSameMessageContent {
-			return // контент не изменился или успешно обновлён
+			return // content unchanged or update succeeded
 		}
 		log.Printf("dashboard: owner %d: edit PM failed (%v), will re-send", owner.UserID, err)
 	}
@@ -485,14 +485,14 @@ func (d *Dashboard) UpdateDashboards(ctx context.Context, b *tele.Bot) {
 			if status.IsOnline && status.Port > 0 && status.Port != knownPort {
 				_ = d.db.SetServerPort(s.ID, status.Port)
 			}
-			// Уведомление при переходе сервера в оффлайн (только смена статуса).
+			// Notification when the server goes offline (status change only).
 			d.mu.Lock()
 			wasOnline := d.lastOnline[s.ID]
 			if wasOnline != status.IsOnline {
 				d.lastOnline[s.ID] = status.IsOnline
 				if !status.IsOnline {
-					// Сервер ушёл оффлайн: сбрасываем список игроков, чтобы
-					// не слать «вышел» по всем, когда сервер вернётся онлайн.
+					// Server went offline: reset the player list so we don't
+					// send "left" for everyone when the server comes back online.
 					delete(d.lastPlayers, s.ID)
 				}
 				d.mu.Unlock()
@@ -506,7 +506,7 @@ func (d *Dashboard) UpdateDashboards(ctx context.Context, b *tele.Bot) {
 				d.mu.Unlock()
 			}
 
-			// Уведомления о входе/выходе игроков (по списку из mcsrvstat).
+			// Player join/leave notifications (from the mcsrvstat list).
 			if status.IsOnline && status.PlayersOnline > 0 {
 				d.notifyPlayers(b, s, status.PlayerList)
 			}
@@ -526,7 +526,7 @@ func (d *Dashboard) UpdateDashboards(ctx context.Context, b *tele.Bot) {
 	}
 }
 
-// Временное уведомление, удаляется через 60 секунд.
+// Temporary notification, deleted after 60 seconds.
 func (d *Dashboard) notifyServerOffline(b *tele.Bot, s *database.Server) {
 	name := s.DisplayName
 	if name == "" {
@@ -551,10 +551,10 @@ func (d *Dashboard) notifyServerOffline(b *tele.Bot, s *database.Server) {
 	}
 }
 
-// notifyPlayers шлёт в чаты сервера уведомления о входе/выходе игроков
-// (дельта против lastPlayers). До 3 игроков — по одному сообщению на игрока
-// («🟢 X зашёл на сервер»), больше — одно объединённое сообщение списком.
-// Каждое уведомление временное: удаляется через 45 секунд.
+// notifyPlayers sends join/leave notifications to the server's chats
+// (delta against lastPlayers). Up to 3 players — one message per player
+// ("🟢 X joined the server"), more — one combined list message.
+// Each notification is temporary: deleted after 45 seconds.
 func (d *Dashboard) notifyPlayers(b *tele.Bot, s *database.Server, current []string) {
 	d.mu.Lock()
 	prev := d.lastPlayers[s.ID]
@@ -657,7 +657,7 @@ func (d *Dashboard) CheckAllSessions(ctx context.Context, b *tele.Bot) {
 		err := d.managers.For(uid).CheckSession(ctx)
 		if err != nil {
 			if isCloudflareError(err) {
-				continue // временный бан запросов — не про куку
+				continue // temporary request ban — not about the cookie
 			}
 			d.mu.Lock()
 			notified := d.sessionBroken[uid]
@@ -689,7 +689,7 @@ func isCloudflareError(err error) bool {
 	return strings.Contains(err.Error(), "Cloudflare")
 }
 
-// Ошибки отдельных чатов не фатальны.
+// Errors of individual chats are not fatal.
 func (d *Dashboard) BroadcastMessage(b *tele.Bot, chatIDs []int64, text string) {
 	for _, chatID := range chatIDs {
 		_, err := b.Send(&tele.Chat{ID: chatID}, text)

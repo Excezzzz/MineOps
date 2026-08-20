@@ -6,7 +6,7 @@ import (
 	"fmt"
 )
 
-// any из JSON-дерева → int; 0 при неудаче.
+// any from a JSON tree → int; 0 on failure.
 func ToInt(v any) int {
 	switch t := v.(type) {
 	case int:
@@ -26,7 +26,7 @@ func ToInt(v any) int {
 	return 0
 }
 
-// any → string; "" при неудаче.
+// any → string; "" on failure.
 func ToStr(v any) string {
 	if s, ok := v.(string); ok {
 		return s

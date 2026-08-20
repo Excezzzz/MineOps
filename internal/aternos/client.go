@@ -21,6 +21,7 @@ import (
 	"github.com/dop251/goja"
 )
 
+// TODO: move to i18n when aternos package gets lang context
 const (
 	msgCloudflare = "⚠️ Aternos временно заблокировал запрос (Cloudflare). " +
 		"Подождите 3-5 минут или обновите куку /set_session."
@@ -75,7 +76,7 @@ func extractTokenJS(page string) (string, error) {
 	}
 	codes := arrowFnRe.FindAllString(head, -1)
 	if len(codes) == 0 {
-		return "", fmt.Errorf("не удалось найти JS-функцию токена")
+		return "", fmt.Errorf("token JS function not found")
 	}
 	code := codes[0]
 	if len(codes) > 1 {
@@ -120,11 +121,11 @@ func execTokenJS(code string) (string, error) {
 	}
 
 	if _, err := vm.RunString(code); err != nil {
-		return "", fmt.Errorf("JS-выполнение токена не удалось: %w", err)
+		return "", fmt.Errorf("token JS execution failed: %w", err)
 	}
 	tokenVal := windowObj.Get("AJAX_TOKEN")
 	if tokenVal == nil || goja.IsUndefined(tokenVal) || goja.IsNull(tokenVal) {
-		return "", fmt.Errorf("AJAX_TOKEN не вычислен")
+		return "", fmt.Errorf("AJAX_TOKEN not computed")
 	}
 	return tokenVal.String(), nil
 }
@@ -144,7 +145,7 @@ func fetchToken(ctx context.Context, httpClient *http.Client) (string, error) {
 		return "", errCloudflare
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("aternos /go/ вернул HTTP %d", resp.StatusCode)
+		return "", fmt.Errorf("aternos /go/ returned HTTP %d", resp.StatusCode)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
@@ -164,7 +165,7 @@ const secAlphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
 func genSecPart() string {
 	buf := make([]byte, 11)
 	if _, err := rand.Read(buf); err != nil {
-		// Псевдослучайный фолбэк (не должен случиться).
+		// Pseudo-random fallback (should never happen).
 		for i := range buf {
 			buf[i] = byte(i*7 + 13)
 		}
@@ -191,9 +192,9 @@ type Session struct {
 	httpClient *http.Client
 	SessionID  string    // ATERNOS_SESSION
 	Token      string    // AJAX_TOKEN
-	secKey     string    // ATERNOS_SEC_<key> (имя куки)
-	secVal     string    // значение куки ATERNOS_SEC_<key>
-	expiresAt  time.Time // истечение кеша клиента
+	secKey     string    // ATERNOS_SEC_<key> (cookie name)
+	secVal     string    // value of the ATERNOS_SEC_<key> cookie
+	expiresAt  time.Time // client cache expiry
 }
 
 var lastStatusRe = regexp.MustCompile(`(?s)<script>\s*var lastStatus\s*?=\s*?(\{.+?\});?\s*</script>`)
@@ -202,8 +203,8 @@ func setBrowserHeaders(req *http.Request, cookies map[string]string, sendToken b
 	req.Header.Set("User-Agent", requestUA)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
-	// ВАЖНО: Accept-Encoding НЕ ставим вручную — иначе Go не декомпрессит
-	// gzip автоматически и regex по токену не найдёт совпадение.
+	// IMPORTANT: do not set Accept-Encoding manually — otherwise Go won't
+	// decompress gzip automatically and the token regex won't find a match.
 	req.Header.Set("Referer", baseURL+"/servers/")
 	if sendToken {
 		req.Header.Set("X-Requested-With", "XMLHttpRequest")
@@ -266,7 +267,7 @@ func (s *Session) request(ctx context.Context, method, path string,
 		}
 		if resp.StatusCode == http.StatusPaymentRequired {
 			resp.Body.Close()
-			return nil, fmt.Errorf("Aternos: недостаточно прав (402)")
+			return nil, fmt.Errorf("aternos: insufficient rights (402)")
 		}
 		if resp.StatusCode == http.StatusUnauthorized {
 			resp.Body.Close()
@@ -278,11 +279,11 @@ func (s *Session) request(ctx context.Context, method, path string,
 			if strings.HasPrefix(loc, "/go/") {
 				return nil, NewError(msgSessionExpired)
 			}
-			return nil, fmt.Errorf("aternos: неожиданный редирект на %s", loc)
+			return nil, fmt.Errorf("aternos: unexpected redirect to %s", loc)
 		}
 		if resp.StatusCode >= 400 {
 			resp.Body.Close()
-			return nil, fmt.Errorf("aternos: HTTP %d для %s", resp.StatusCode, path)
+			return nil, fmt.Errorf("aternos: HTTP %d for %s", resp.StatusCode, path)
 		}
 		return resp, nil
 	}
@@ -325,11 +326,11 @@ func (s *Session) FetchServerInfo(ctx context.Context, servID string) (*ServerIn
 	}
 	match := lastStatusRe.FindSubmatch(body)
 	if match == nil {
-		return nil, fmt.Errorf("не удалось распарсить lastStatus сервера %s", servID)
+		return nil, fmt.Errorf("failed to parse lastStatus for server %s", servID)
 	}
 	var raw map[string]any
 	if err := json.Unmarshal(match[1], &raw); err != nil {
-		return nil, fmt.Errorf("битый JSON lastStatus: %w", err)
+		return nil, fmt.Errorf("corrupt lastStatus JSON: %w", err)
 	}
 	info := &ServerInfo{
 		Status:     util.ToInt(raw["status"]),
@@ -364,7 +365,7 @@ func (s *Session) ListServers(ctx context.Context) ([]ServerBrief, error) {
 			brief.ServerIP = info.IP
 			brief.DisplayName = util.FirstNonEmpty(info.Name, info.IP, id)
 			if brief.ServerIP == "" {
-				// IP не отдан панелью — собираем адрес из id сервера.
+				// IP not provided by the panel — build the address from the server id.
 				brief.ServerIP = id + ".aternos.me"
 			}
 		}
@@ -403,7 +404,7 @@ func (s *Session) actionServer(ctx context.Context, action string, servID string
 	}
 	var result map[string]any
 	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("aternos: неожиданный ответ %s: %s", action, truncate(string(body), 120))
+		return nil, fmt.Errorf("aternos: unexpected response from %s: %s", action, truncate(string(body), 120))
 	}
 	return result, nil
 }
@@ -415,7 +416,7 @@ func truncate(s string, n int) string {
 	return s[:n] + "..."
 }
 
-// Start запускает сервер; при не принятой EULA сначала принимает её.
+// Start starts the server; if the EULA is not accepted, it accepts it first.
 func (s *Session) Start(ctx context.Context, servID string) error {
 	start := func() (map[string]any, error) {
 		return s.actionServer(ctx, "start", servID, url.Values{
@@ -449,7 +450,7 @@ func (s *Session) Start(ctx context.Context, servID string) error {
 func serverStartReason(reason string) string {
 	switch reason {
 	case "eula":
-		return "EULA не принята. Запустите сервер с accepteula=True"
+		return "EULA not accepted"
 	case "already":
 		return "Server has already started"
 	case "wrongversion":

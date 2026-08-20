@@ -36,8 +36,8 @@ func (t *authInterceptor) RoundTrip(req *http.Request) (*http.Response, error) {
 	return resp, err
 }
 
-// isAuthFailure — признаки ошибки аутентификации Aternos:
-// Cloudflare-блокировка (403), 401, 403 или редирект на /go/ (истекла кука).
+// isAuthFailure detects Aternos authentication failures:
+// Cloudflare block (403), 401, 403, or redirect to /go/ (expired cookie).
 func isAuthFailure(resp *http.Response) bool {
 	switch resp.StatusCode {
 	case http.StatusUnauthorized, http.StatusForbidden:

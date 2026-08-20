@@ -665,7 +665,7 @@ func (bot *Bot) cmdEmergency(c tele.Context) error {
 		}
 		uid := m.Sender.ID
 		if uid != bot.cfg.SuperAdminID {
-			return nil // молча: только суперадмин
+			return nil // silently: superadmin only
 		}
 		lang := bot.uiLang(c)
 		owner, _ := bot.db.GetOwner(uid)
@@ -673,11 +673,11 @@ func (bot *Bot) cmdEmergency(c tele.Context) error {
 			_, err := bot.b.Send(m.Chat, i18n.T(lang, "need_onboarding"))
 			return err
 		}
-		// 1) Мгновенно отбираем права у ВСЕХ пользователей всех чатов.
+		// 1) Immediately revoke rights from ALL users of all chats.
 		if err := bot.db.RevokeAllAccess(); err != nil {
 			log.Printf("emergency: failed to revoke rights: %v", err)
 		}
-		// 2) Глобальный флаг lockdown_mode = ON.
+		// 2) Global lockdown_mode flag = ON.
 		_ = bot.db.SetOwnerLockdown(uid, true)
 		_ = bot.db.LogAction(uid, "emergency",
 			"full lockdown: all user rights revoked, start impossible", 0, 0, 0)

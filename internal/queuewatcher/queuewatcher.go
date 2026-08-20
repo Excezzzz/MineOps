@@ -51,9 +51,9 @@ func (w *Watcher) IsWatching(serverID int64) bool {
 	return w.active[serverID]
 }
 
-// Start запускает ЕДИНЫЙ фоновый наблюдатель очереди (если ещё не запущен):
-// опрос панели каждые 15 секунд, автоподтверждение при lang=="confirm"
-// плюс слепой Confirm каждые 45 секунд, пока сервер не вышел онлайн.
+// Start launches the single background queue watcher (if not running yet):
+// panel polling every 15 seconds, auto-confirm on lang=="confirm",
+// plus a blind Confirm every 45 seconds until the server comes online.
 func (w *Watcher) Start(b *tele.Bot, ownerID, serverID int64) {
 	w.mu.Lock()
 	if w.active[serverID] {
@@ -65,10 +65,10 @@ func (w *Watcher) Start(b *tele.Bot, ownerID, serverID int64) {
 	go w.watchLoop(b, ownerID, serverID)
 }
 
-// Rescan запускает наблюдение за всеми активными серверами, которые уже
-// находятся в очереди Aternos (пережили перезапуск бота). Каждый сервер
-// проверяется панелью один раз; если он в состоянии запуска/очереди —
-// за ним начинает следить watcher.
+// Rescan starts watching all active servers that are already in the
+// Aternos queue (survived a bot restart). Each server is checked against
+// the panel once; if it is in the starting/queue state — a watcher
+// takes over.
 func (w *Watcher) Rescan(b *tele.Bot) {
 	owners, err := w.db.GetAllOwners()
 	if err != nil {
@@ -111,9 +111,9 @@ func (w *Watcher) watchLoop(b *tele.Bot, ownerID, serverID int64) {
 	failures := 0
 	lastDashUpdate := time.Time{}
 	lastBlindConfirm := time.Time{}
-	// inactiveSince — когда сервер последний раз был в «неактивном» состоянии
-	// (не в очереди и не грузится). Если он так и не запустился в течение
-	// idleTimeout — считаем запуск проваленным и уведомляем владельца.
+	// inactiveSince — when the server was last in an "inactive" state
+	// (not in queue, not loading). If it still has not started within
+	// idleTimeout — the launch is considered failed and the owner is notified.
 	var inactiveSince time.Time
 
 	for {
@@ -125,7 +125,7 @@ func (w *Watcher) watchLoop(b *tele.Bot, ownerID, serverID int64) {
 			log.Printf("queuewatcher: server %d: poll failed: %v", serverID, err)
 			failures++
 			if failures >= maxFailures {
-				w.notifyOwner(b, ownerID, serverID, fmt.Sprintf("опрос очереди не удался: %v", err))
+				w.notifyOwner(b, ownerID, serverID, fmt.Sprintf("queue poll failed: %v", err))
 				break
 			}
 			time.Sleep(pollInterval)
@@ -136,8 +136,8 @@ func (w *Watcher) watchLoop(b *tele.Bot, ownerID, serverID int64) {
 		serverLang := strings.ToLower(status.Lang)
 		queueValue := parseQueue(status.Queue)
 
-		// Сервер вышел онлайн (status==1 или lang on/online) — уведомляем чаты
-		// и завершаем наблюдение.
+		// Server came online (status==1 or lang on/online) — notify chats
+		// and finish watching.
 		if status.Status == 1 || serverLang == "on" || serverLang == "online" {
 			log.Printf("queuewatcher: server %d: online, watcher finished", serverID)
 			if p := util.ToInt(status.Port); p > 0 {
@@ -149,15 +149,15 @@ func (w *Watcher) watchLoop(b *tele.Bot, ownerID, serverID int64) {
 			return
 		}
 
-		// active — сервер в состоянии, когда запуск ещё в процессе
-		// (очередь идёт, сервер грузится или просит подтверждение).
+		// active — the server is in a state where launch is still in progress
+		// (queue running, server loading, or awaiting confirmation).
 		active := false
 
-		// Aternos просит подтверждение запуска — подтверждаем сразу.
+		// Aternos asks for launch confirmation — confirm right away.
 		if strings.Contains(serverLang, "confirm") {
 			active = true
-			// Свежий контекст: предыдущий уже отменён (cancel() после FetchInfo),
-			// иначе ConfirmServer сразу упадёт с context canceled.
+			// Fresh context: the previous one was already canceled (cancel() after FetchInfo),
+			// otherwise ConfirmServer fails immediately with context canceled.
 			cctx, ccancel := context.WithTimeout(context.Background(), 45*time.Second)
 			err := manager.ConfirmServer(cctx, serverID)
 			ccancel()
@@ -174,8 +174,8 @@ func (w *Watcher) watchLoop(b *tele.Bot, ownerID, serverID int64) {
 			continue
 		}
 
-		// Слепой Confirm каждые 45 секунд: Aternos не всегда успевает
-		// обновить lang, а confirm API идемпотентен — лишний запрос не вредит.
+		// Blind Confirm every 45 seconds: Aternos does not always update
+		// lang in time, and the confirm API is idempotent — an extra request does no harm.
 		if time.Since(lastBlindConfirm) >= blindConfirmInterval {
 			cctx, ccancel := context.WithTimeout(context.Background(), 45*time.Second)
 			_ = manager.ConfirmServer(cctx, serverID)
@@ -209,7 +209,7 @@ func (w *Watcher) watchLoop(b *tele.Bot, ownerID, serverID int64) {
 			inactiveSince = time.Now()
 		} else if time.Since(inactiveSince) >= idleTimeout {
 			w.dash.ClearQueuePosition(serverID)
-			w.notifyOwner(b, ownerID, serverID, "сервер не запустился (20 минут вне очереди)")
+			w.notifyOwner(b, ownerID, serverID, "server did not start (20 min outside queue)")
 			w.refreshDashboard(b, serverID)
 			return
 		}
@@ -220,10 +220,10 @@ func (w *Watcher) watchLoop(b *tele.Bot, ownerID, serverID int64) {
 	w.refreshDashboard(b, serverID)
 }
 
-// parseQueue — позиция в очереди из lastStatus['queue'].
+// parseQueue — queue position from lastStatus['queue'].
 //
-// Значение может быть: числом (в т.ч. -1 — ждёт подтверждения), числовой
-// строкой или dict вида {"count": N, "position": M}. None — очередь не определена.
+// The value can be: a number (including -1 — awaiting confirmation), a numeric
+// string, or a dict like {"count": N, "position": M}. None — queue undefined.
 func parseQueue(raw any) int {
 	switch t := raw.(type) {
 	case nil:
@@ -312,7 +312,7 @@ func (w *Watcher) chatLang(chatID int64) string {
 	return "ru"
 }
 
-// Временное уведомление, удаляется через 60 секунд.
+// Temporary notification, deleted after 60 seconds.
 func (w *Watcher) notifyServerOnline(b *tele.Bot, serverID int64, status *aternos.ServerInfo) {
 	server, err := w.db.GetServer(serverID)
 	if err != nil || server == nil {

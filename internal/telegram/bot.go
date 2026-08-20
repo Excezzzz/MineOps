@@ -28,14 +28,14 @@ type Bot struct {
 	fsm      *FSM
 
 	mu              sync.Mutex
-	lastAccessReq   map[int64]time.Time // cooldown запросов доступа (5 мин)
-	lastErrNotified time.Time           // анти-спам уведомлений суперадмину
+	lastAccessReq   map[int64]time.Time // cooldown for access requests (5 min)
+	lastErrNotified time.Time           // anti-spam for superadmin notifications
 
 	sessionNotifyMu   sync.Mutex
-	lastSessionNotify map[int64]time.Time // анти-спам уведомлений о просрочке куки
+	lastSessionNotify map[int64]time.Time // anti-spam for cookie expiry notifications
 
 	schedMu       sync.Mutex
-	lastSchedFire map[int64]string // дата последнего планового запуска (по владельцу)
+	lastSchedFire map[int64]string // date of the last scheduled start (per owner)
 }
 
 const (
@@ -85,15 +85,15 @@ func NewBot(cfg *config.Config, db *database.DB, managers *aternos.Registry,
 				}
 				bot.registerUser(c)
 			}
-			// Автоудаление команд из группового чата (в ЛС сообщения остаются).
-			// /link и /unlink не удаляются — их ответы привязаны к контексту.
+			// Auto-delete commands from group chats (in DMs messages stay).
+			// /link and /unlink are not deleted — their replies are tied to the context.
 			if c.Message() != nil && bot.isGroup(c) {
 				text := c.Message().Text
 				if strings.HasPrefix(text, "/") {
 					cmd := strings.Fields(text)[0]
 					if cmd != "/link" && cmd != "/unlink" {
 						defer func() {
-							time.Sleep(2 * time.Second) // дать время увидеть команду
+							time.Sleep(2 * time.Second) // give time to see the command
 							_ = bot.b.Delete(c.Message())
 						}()
 					}
@@ -117,7 +117,7 @@ func (bot *Bot) Start() {
 func (bot *Bot) registerHandlers() {
 	b := bot.b
 
-	// ЛС: /start, /panel, /help, /set_session, /emergency, /announce
+	// DM: /start, /panel, /help, /set_session, /emergency, /announce
 	b.Handle("/start", bot.cmdStart)
 	b.Handle("/panel", bot.cmdPanel)
 	b.Handle("/help", bot.cmdHelp)
@@ -131,7 +131,7 @@ func (bot *Bot) registerHandlers() {
 	b.Handle("/stats", bot.cmdStats)
 	b.Handle("/schedule", bot.cmdSchedule)
 
-	// Группы: /link, /unlink, /status, /run, /grant, /revoke
+	// Groups: /link, /unlink, /status, /run, /grant, /revoke
 	b.Handle("/link", bot.cmdLink)
 	b.Handle("/unlink", bot.cmdUnlink)
 	b.Handle("/status", bot.cmdStatus)
@@ -139,13 +139,13 @@ func (bot *Bot) registerHandlers() {
 	b.Handle("/grant", bot.cmdGrant)
 	b.Handle("/revoke", bot.cmdRevoke)
 
-	// Текст (FSM: онбординг, обновление куки)
+	// Text (FSM: onboarding, cookie update)
 	b.Handle(tele.OnText, bot.onText)
 
-	// Все callback-кнопки (единый диспетчер с префиксной маршрутизацией)
+	// All callback buttons (single dispatcher with prefix routing)
 	b.Handle(tele.OnCallback, bot.onCallback)
 
-	// Заглушка: любые прочие события не падают в ошибку
+	// Stub: any other events don't fall into an error
 	b.Handle(tele.OnEdited, func(c tele.Context) error { return nil })
 }
 
@@ -171,10 +171,10 @@ func (bot *Bot) setCommands() {
 	)
 }
 
-//   - ЛС: публичный онбординг — любой пользователь может пройти /start,
-//     добавить свои серверы Aternos и управлять ими (multi-tenant);
-//   - группы: привязанные к любому владельцу чаты работают в штатном режиме,
-//     права разруливаются через RBAC; прочее — игнор.
+//   - DM: public onboarding — any user can run /start,
+//     add their Aternos servers and manage them (multi-tenant);
+//   - groups: chats linked to any owner work as usual,
+//     rights are handled via RBAC; everything else — ignored.
 func (bot *Bot) firewall(c tele.Context) bool {
 	if c.Message() == nil {
 		return true
@@ -202,7 +202,7 @@ func (bot *Bot) firewall(c tele.Context) bool {
 	}
 }
 
-// Участники привязанных чатов автоматически попадают в users (для проверки доступа).
+// Members of linked chats are automatically added to users (for access checks).
 func (bot *Bot) registerUser(c tele.Context) {
 	m := c.Message()
 	if m == nil || m.Sender == nil {
@@ -223,7 +223,7 @@ func (bot *Bot) lockdownActive(ownerID int64) bool {
 	return on
 }
 
-// Отвечает на кнопку/команду при локдауне; true — запуск заблокирован.
+// Responds to a button/command during lockdown; true — start is blocked.
 func (bot *Bot) lockdownBlocked(c tele.Context, ownerID int64) bool {
 	if !bot.lockdownActive(ownerID) {
 		return false
@@ -238,8 +238,8 @@ func (bot *Bot) lockdownBlocked(c tele.Context, ownerID int64) bool {
 	return true
 }
 
-// Сессия Aternos истекла (срабатывает из перехватчика HTTP-запросов).
-// Анти-спам: не чаще одного сообщения на владельца в 10 минут.
+// Aternos session expired (triggered from the HTTP request interceptor).
+// Anti-spam: at most one message per owner per 10 minutes.
 func (bot *Bot) NotifySessionExpired(ownerID int64) {
 	if ownerID <= 0 {
 		return
@@ -265,16 +265,16 @@ func (bot *Bot) onError(err error, c tele.Context) {
 	if c != nil {
 		log.Printf("  context: update=%d chat=%d", c.Update().ID, c.Chat().ID)
 	}
-	// Мусорные ошибки Telegram API (спам кнопками, rate limit, повторные
-	// правки) владельцу не отправляются — это не ошибки системы.
+	// Noise errors from the Telegram API (button spam, rate limit, repeated
+	// edits) are not sent to the owner — they are not system errors.
 	if isNoiseError(err) {
 		return
 	}
 	bot.notifyOwnerError(err.Error())
 }
 
-// isNoiseError — ошибки, которые возникают при спаме кнопками / кликах
-// по дашборду в группе и НЕ являются реальными сбоями бота.
+// isNoiseError — errors that arise from button spam / dashboard
+// clicks in a group and are NOT real bot failures.
 func isNoiseError(err error) bool {
 	if err == nil {
 		return true
@@ -293,8 +293,8 @@ func isNoiseError(err error) bool {
 	return false
 }
 
-// Отправка ошибки Владельцу в ЛС.
-// Анти-спам: не чаще одного сообщения в минуту.
+// Sends an error to the Owner in DM.
+// Anti-spam: at most one message per minute.
 func (bot *Bot) notifyOwnerError(text string) {
 	if bot.cfg.SuperAdminID <= 0 {
 		return
@@ -308,7 +308,7 @@ func (bot *Bot) notifyOwnerError(text string) {
 	bot.lastErrNotified = now
 	bot.mu.Unlock()
 
-	msg := "⚠️ <b>Ошибка бота:</b>\n<code>" + escapeHTML(text) + "</code>"
+	msg := "⚠️ <b>Bot error:</b>\n<code>" + escapeHTML(text) + "</code>"
 	if len(msg) > 3500 {
 		msg = msg[:3500]
 	}
@@ -318,8 +318,8 @@ func (bot *Bot) notifyOwnerError(text string) {
 	}
 }
 
-// Уведомление Владельца о паниках (panic/exception).
-// Анти-спам: не чаще одного сообщения в минуту.
+// Notifies the Owner about panics (panic/exception).
+// Anti-spam: at most one message per minute.
 func (bot *Bot) notifyOwnerCritical(reason string, stack []byte) {
 	if bot.cfg.SuperAdminID <= 0 {
 		return
@@ -333,7 +333,7 @@ func (bot *Bot) notifyOwnerCritical(reason string, stack []byte) {
 	bot.lastErrNotified = now
 	bot.mu.Unlock()
 
-	text := "🚨 <b>Паника в боте:</b>\n<code>" + escapeHTML(reason) + "</code>"
+	text := "🚨 <b>Bot panic:</b>\n<code>" + escapeHTML(reason) + "</code>"
 	if len(stack) > 0 {
 		text += "\n<pre>" + escapeHTML(string(stack)) + "</pre>"
 	}
@@ -412,10 +412,10 @@ func (bot *Bot) answer(c tele.Context, text string, showAlert bool) {
 	_ = c.Respond(&tele.CallbackResponse{Text: text, ShowAlert: showAlert})
 }
 
-// edit — безопасный edit_text (не падает на «message is not modified»).
+// edit — safe edit_text (doesn't fail on "message is not modified").
 func (bot *Bot) edit(msg tele.Editable, text string, kb *tele.ReplyMarkup) error {
-	// ParseMode задаём явно: переданный SendOptions иначе перетирает
-	// глобальный ParseMode (HTML) пустым значением — теги показываются как текст.
+	// ParseMode is set explicitly: otherwise the passed SendOptions overrides
+	// the global ParseMode (HTML) with an empty value — tags are shown as text.
 	_, err := bot.b.Edit(msg, text, &tele.SendOptions{ParseMode: tele.ModeHTML, ReplyMarkup: kb})
 	if err == tele.ErrSameMessageContent {
 		return nil
@@ -426,7 +426,7 @@ func (bot *Bot) edit(msg tele.Editable, text string, kb *tele.ReplyMarkup) error
 	return err
 }
 
-// Обрезает всё до последнего «=».
+// Trims everything up to the last "=".
 func decodeCookie(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if idx := strings.LastIndex(raw, "="); idx >= 0 {

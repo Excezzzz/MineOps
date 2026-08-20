@@ -31,7 +31,7 @@ func main() {
 
 	db, err := database.Open(cfg.DBPath)
 	if err != nil {
-		log.Fatalf("база данных: %v", err)
+		log.Fatalf("database: %v", err)
 	}
 	defer db.Close()
 	log.Printf("DB: %s (schema v%d)", cfg.DBPath, database.SchemaVersion)
@@ -45,12 +45,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("telebot: %v", err)
 	}
-	// Перехватчик ошибок аутентификации Aternos: уведомляем Владельца в ЛС.
+	// Aternos auth error hook: notify the Owner in private messages.
 	managers.SetAuthHook(func(ownerID int64) {
 		bot.NotifySessionExpired(ownerID)
 	})
 
-	// Планировщик: дашборды каждые 30 секунд, проверка сессий каждые 5 минут.
+	// Scheduler: dashboards every 30 seconds, session checks every 5 minutes.
 	s := gocron.NewScheduler(time.UTC)
 	s.SingletonMode()
 	_, err = s.Every(cfg.UpdateInterval).Seconds().Do(func() {
@@ -65,7 +65,7 @@ func main() {
 	if err != nil {
 		log.Printf("scheduler (sessions): %v", err)
 	}
-	// Расписание автозапуска: каждые 60 секунд проверяем совпадение времени.
+	// Auto-start schedule: check for the time match every 60 seconds.
 	_, err = s.Every(60).Seconds().Do(func() {
 		bot.CheckSchedule()
 	})
@@ -76,14 +76,14 @@ func main() {
 	log.Printf("scheduler started: dashboard %ds, sessions %ds, schedule 60s", cfg.UpdateInterval, cfg.SessionCheck)
 
 	log.Printf("bot started (pid %d)", os.Getpid())
-	// Восстановить наблюдение за серверами, которые уже в очереди Aternos
-	// (watcher'ы живут в памяти и теряются при перезапуске бота).
+	// Resume watching servers that are already in the Aternos queue
+	// (watchers live in memory and are lost on bot restart).
 	go func() {
 		time.Sleep(5 * time.Second)
 		watcher.Rescan(bot.Bot())
 	}()
 
-	// Graceful shutdown: SIGINT/SIGTERM → останавливаем планировщик, бота, БД.
+	// Graceful shutdown: SIGINT/SIGTERM → stop scheduler, bot, DB.
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 	go func() {

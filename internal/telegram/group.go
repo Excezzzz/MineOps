@@ -33,7 +33,7 @@ func (bot *Bot) cmdLink(c tele.Context) error {
 		uid := m.Sender.ID
 		isOwner, _ := bot.db.IsOwner(uid)
 		if !isOwner {
-			return nil // молча: только владелец сервера
+			return nil // silently: server owner only
 		}
 		lang := bot.uiLang(c)
 		chatID := m.Chat.ID
@@ -189,7 +189,7 @@ func (bot *Bot) cmdRun(c tele.Context) error {
 			return err
 		}
 
-		// В группе с несколькими серверами — даём выбор, какой запустить.
+		// In a group with multiple servers — let the user choose which one to start.
 		if bot.isGroup(c) && len(servers) > 1 {
 			_, err := bot.b.Send(m.Chat, i18n.T(lang, "run_pick"), runServerPickerKB(servers, chatID, lang))
 			return err
@@ -326,7 +326,7 @@ func (bot *Bot) setAccessCmd(c tele.Context, grant bool) error {
 	lang := bot.uiLang(c)
 	isChatOwner, _ := bot.db.IsChatOwner(chatID, uid)
 	if !isChatOwner {
-		return nil // молча: только владелец чата
+		return nil // silently: chat owner only
 	}
 
 	verb := "/grant"
@@ -531,7 +531,7 @@ func (bot *Bot) cmdGroupHelp(c tele.Context) error {
 	})
 }
 
-// canManage — владелец чата или участник с доступом (без учёта локдауна).
+// canManage — chat owner or member with access (regardless of lockdown).
 func (bot *Bot) canManage(uid, chatID int64) bool {
 	isChatOwner, _ := bot.db.IsChatOwner(chatID, uid)
 	if isChatOwner {
@@ -560,7 +560,7 @@ func (bot *Bot) toast(c tele.Context, text string, seconds int) {
 	}()
 }
 
-// В ЛС сообщения остаются.
+// In DMs messages stay.
 func (bot *Bot) autoDeleteInGroup(c tele.Context, msg *tele.Message, seconds int) {
 	if !bot.isGroup(c) || msg == nil {
 		return
@@ -575,7 +575,7 @@ func (bot *Bot) autoDeleteInGroup(c tele.Context, msg *tele.Message, seconds int
 	}()
 }
 
-// Возвращает ownerID и true, если разрешено.
+// Returns ownerID and true if allowed.
 func (bot *Bot) requireChatPermission(c tele.Context) (int64, bool) {
 	cb := c.Callback()
 	if cb == nil || cb.Message == nil || cb.Message.Chat == nil || cb.Sender == nil {
@@ -685,7 +685,7 @@ func (bot *Bot) cbRefreshDashboard(c tele.Context) error {
 	if owner.UserID != cb.Sender.ID {
 		ok, _ := bot.db.UserCanManage(cb.Sender.ID, chatID)
 		if !ok {
-			return nil // нет доступа — молча
+			return nil // no access — silently
 		}
 	}
 	bot.dash.UpdateChatsDashboards(context.Background(), bot.b, []int64{chatID})
@@ -796,7 +796,7 @@ func (bot *Bot) onText(c tele.Context) error {
 		case fsmOnbWaitingCookie:
 			bot.onSessionCookie(c)
 		case fsmOnbSelecting:
-			// выбор серверов — только кнопками; текст игнорируем
+			// server selection — buttons only; text is ignored
 		case fsmAdminWaitCookie:
 			bot.onNewCookieMessage(c)
 		}
@@ -804,9 +804,9 @@ func (bot *Bot) onText(c tele.Context) error {
 	})
 }
 
-// friendlyStartError — дружелюбное описание ошибки запуска: если сервер
-// уже запускается или оффлайн, пользователю показывается нейтральное
-// сообщение без сырых деталей и без каких-либо уведомлений Владельцу.
+// friendlyStartError — friendly description of a start error: if the server
+// is already starting or offline, the user sees a neutral message without
+// raw details and without any notifications to the Owner.
 func friendlyStartError(err error, lang string) string {
 	msg := strings.ToLower(err.Error())
 	switch {

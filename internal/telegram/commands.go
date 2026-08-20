@@ -150,7 +150,7 @@ func (bot *Bot) cmdStats(c tele.Context) error {
 	})
 }
 
-// Форматы: «только что», «5м», «2ч», «вчера», «3д».
+// Formats: "just now", "5m", "2h", "yesterday", "3d".
 func timeAgo(ts string, lang string) string {
 	t, err := time.Parse("2006-01-02T15:04:05", ts)
 	if err != nil {
@@ -217,7 +217,7 @@ func (bot *Bot) cmdSchedule(c tele.Context) error {
 	})
 }
 
-// Однократное расписание сбрасывается после запуска; защита от повтора в течение суток — в памяти бота.
+// One-time schedule resets after firing; protection against repeats within 24 hours — in bot memory.
 func (bot *Bot) CheckSchedule() {
 	owners, err := bot.db.GetScheduledOwners()
 	if err != nil {
@@ -281,8 +281,8 @@ func (bot *Bot) fireSchedule(o *database.Owner) {
 	}
 }
 
-// Для ЛС — язык владельца (или отправителя), для группы — язык владельца
-// чата; фолбэк — детект по LanguageCode.
+// For DM — owner's language (or sender's), for group — the chat owner's
+// language; fallback — detection by LanguageCode.
 func (bot *Bot) uiLang(c tele.Context) string {
 	if c == nil {
 		return "ru"

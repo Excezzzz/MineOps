@@ -21,17 +21,17 @@ type Manager struct {
 	httpClient *http.Client
 
 	mu        sync.Mutex
-	cache     map[int64]*Session // owner_id -> сессия
+	cache     map[int64]*Session // owner_id -> session
 	failUntil map[int64]time.Time
 	locks     map[int64]*sync.Mutex
 }
 
 const (
-	clientTTL  = 30 * time.Minute // TTL кеша сессий
-	cfCooldown = 5 * time.Minute  // пауза после Cloudflare-бана
+	clientTTL  = 30 * time.Minute // session cache TTL
+	cfCooldown = 5 * time.Minute  // pause after Cloudflare ban
 )
 
-// (общий http.Client разделяется)
+// (shared http.Client)
 func NewManager(ownerID int64, db *database.DB, httpClient *http.Client) *Manager {
 	return &Manager{
 		ownerID:    ownerID,
@@ -61,7 +61,7 @@ func (m *Manager) lang() string {
 	return "ru"
 }
 
-// Сопоставление — по известным константам сообщений (равенство или вхождение); неизвестные — как есть.
+// Matching is done against known message constants (equality or containment); unknown ones pass through as-is.
 func (m *Manager) localize(err error) error {
 	if err == nil {
 		return nil
@@ -175,7 +175,7 @@ func cookieFrom(ctx context.Context) string {
 	return ""
 }
 
-// (без сетевых запросов, пока кеш свежий)
+// (no network requests while the cache is fresh)
 func (m *Manager) CheckSession(ctx context.Context) error {
 	return m.run(ctx, func(ctx context.Context) error {
 		_, err := m.getSession(ctx, m.ownerID, cookieFrom(ctx))
@@ -237,7 +237,7 @@ func (m *Manager) StopServer(ctx context.Context, serverID int64) (string, error
 		return "", err
 	}
 	_ = m.db.LogAction(m.ownerID, "server_stop", server.DisplayName, 0, 0, serverID)
-	return fmt.Sprintf("Остановка сервера %s запрошена.", html.EscapeString(server.DisplayName)), nil
+	return fmt.Sprintf("Server %s stop requested.", html.EscapeString(server.DisplayName)), nil
 }
 
 func (m *Manager) ConfirmServer(ctx context.Context, serverID int64) error {
@@ -262,7 +262,7 @@ func (m *Manager) ConfirmServer(ctx context.Context, serverID int64) error {
 	return nil
 }
 
-// (для watcher и панели)
+// (for the watcher and the panel)
 func (m *Manager) FetchInfo(ctx context.Context, serverID int64) (*ServerInfo, error) {
 	server, err := m.db.GetServer(serverID)
 	if err != nil {
@@ -323,7 +323,7 @@ func (m *Manager) ProbeSession(ctx context.Context, cookie string) ([]ServerBrie
 		if asError(err, &aerr) {
 			return nil, err
 		}
-		return nil, NewError(fmt.Sprintf("Не удалось получить список серверов: %v", err))
+		return nil, NewError(fmt.Sprintf("failed to list servers: %v", err))
 	}
 	return servers, nil
 }
@@ -336,7 +336,7 @@ func isExpiredRedirect(err error) bool {
 func (m *Manager) UpdateSession(ctx context.Context, newCookie string) error {
 	cookie := newCookie
 	if cookie == "" {
-		return NewError("Кука не может быть пустой.")
+		return NewError("cookie must not be empty")
 	}
 	if err := m.ProbeCookie(ctx, cookie); err != nil {
 		return err

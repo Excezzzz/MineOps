@@ -13,7 +13,7 @@ import (
 
 const SchemaVersion = 5
 
-// Owner — владелец (свой Aternos-аккаунт).
+// Owner - Aternos account owner.
 type Owner struct {
 	UserID         int64
 	Username       string
@@ -30,7 +30,7 @@ type Owner struct {
 	Lang           string
 }
 
-// Server — сервер Aternos владельца.
+// Server - Aternos server.
 type Server struct {
 	ID          int64
 	OwnerID     int64
@@ -43,7 +43,7 @@ type Server struct {
 	CreatedAt   string
 }
 
-// Chat — привязанный к владельцу групповой чат.
+// Chat - linked Telegram chat.
 type Chat struct {
 	ChatID      int64
 	OwnerID     int64
@@ -53,7 +53,7 @@ type Chat struct {
 	CreatedAt   string
 }
 
-// ChatUser — участник чата и его права.
+// ChatUser - member of a chat with access rights.
 type ChatUser struct {
 	UserID    int64
 	ChatID    int64
@@ -63,7 +63,7 @@ type ChatUser struct {
 	CreatedAt string
 }
 
-// AuditEntry — запись журнала действий владельца.
+// AuditEntry - audit log entry.
 type AuditEntry struct {
 	ID        int64
 	OwnerID   int64
@@ -75,7 +75,7 @@ type AuditEntry struct {
 	CreatedAt string
 }
 
-// DB — обёртка над *sql.DB с миграциями и CRUD.
+// DB - wrapper around *sql.DB with schema + CRUD.
 type DB struct {
 	path string
 	db   *sql.DB
@@ -85,7 +85,7 @@ func nowISO() string {
 	return time.Now().UTC().Format("2006-01-02T15:04:05")
 }
 
-// Open открывает (и при необходимости создаёт) БД, приводит схему к актуальной.
+// Open connects to SQLite (creating schema/migrations if needed).
 func Open(dbPath string) (*DB, error) {
 	if dir := filepath.Dir(dbPath); dir != "" {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -115,7 +115,6 @@ func Open(dbPath string) (*DB, error) {
 	return d, nil
 }
 
-// Close закрывает соединение.
 func (d *DB) Close() error {
 	return d.db.Close()
 }
@@ -268,7 +267,7 @@ func (d *DB) migrate() error {
 	}
 
 	if version < SchemaVersion {
-		return fmt.Errorf("неизвестная версия схемы БД: %d", version)
+		return fmt.Errorf("unknown DB schema version: %d", version)
 	}
 	return nil
 }
@@ -441,7 +440,7 @@ func (d *DB) SetOwnerLang(userID int64, lang string) error {
 	return err
 }
 
-// "18:00" + once — однократный запуск; пустой time отключает.
+// "18:00" + once - one-time run; empty time disables.
 func (d *DB) SetOwnerSchedule(userID int64, scheduleTime string, once bool) error {
 	_, err := d.db.Exec("UPDATE owners SET schedule_time = ?, schedule_once = ?, updated_at = ? WHERE user_id = ?",
 		scheduleTime, boolInt(once), nowISO(), userID)
@@ -520,7 +519,7 @@ func (d *DB) GetOwnerPmPinned(userID int64) (int64, error) {
 	return v.Int64, nil
 }
 
-// Каскадом удаляются серверы/чаты/участники (ON DELETE CASCADE в схеме).
+// Servers/chats/members are deleted via cascade (ON DELETE CASCADE in the schema).
 func (d *DB) DeleteOwner(userID int64) error {
 	_, err := d.db.Exec("DELETE FROM owners WHERE user_id = ?", userID)
 	return err
@@ -550,7 +549,7 @@ func scanServers(rows *sql.Rows) ([]*Server, error) {
 	return out, rows.Err()
 }
 
-// Без лимита: на Aternos может быть сколько угодно серверов.
+// No limit: Aternos can have any number of servers.
 func (d *DB) AddServer(ownerID int64, aternosID, serverIP, displayName string) (int64, error) {
 	_, err := d.db.Exec(
 		"INSERT OR IGNORE INTO servers (owner_id, aternos_id, server_ip, display_name, created_at)"+
@@ -635,13 +634,13 @@ func (d *DB) SetServerAutoConfirm(serverID int64, enabled bool) error {
 	return err
 }
 
-// Каскадом удаляются связки (ON DELETE CASCADE в схеме).
+// Links are removed via cascade (ON DELETE CASCADE in the schema).
 func (d *DB) RemoveServer(serverID int64) error {
 	_, err := d.db.Exec("DELETE FROM servers WHERE id = ?", serverID)
 	return err
 }
 
-// Upsert последнего известного Minecraft-порта.
+// Upsert the last known Minecraft port.
 func (d *DB) SetServerPort(serverID int64, mcPort int) error {
 	_, err := d.db.Exec(
 		"INSERT INTO server_meta (server_id, mc_port, updated_at) VALUES (?, ?, ?)"+
@@ -687,7 +686,7 @@ func scanChats(rows *sql.Rows) ([]*Chat, error) {
 	return out, rows.Err()
 }
 
-// False — чат занят другим владельцем.
+// False - the chat is taken by another owner.
 func (d *DB) AddChat(chatID, ownerID int64, title string) (bool, error) {
 	chat, err := d.GetChat(chatID)
 	if err != nil {
@@ -839,7 +838,7 @@ func (d *DB) IsServerLinkedToChat(chatID, serverID int64) (bool, error) {
 	return err == nil, err
 }
 
-// Права сохраняются при обновлении имени.
+// Access rights are preserved when the name is updated.
 func (d *DB) UpsertChatUser(chatID, userID int64, username, fullName string) error {
 	_, err := d.db.Exec(
 		"INSERT INTO users (user_id, chat_id, username, full_name, created_at)"+
@@ -850,8 +849,8 @@ func (d *DB) UpsertChatUser(chatID, userID int64, username, fullName string) err
 	return err
 }
 
-// RevokeAllAccess мгновенно отбирает право управления (has_access=0)
-// у ВСЕХ пользователей всех чатов (экстренный локдаун).
+// RevokeAllAccess instantly revokes management rights (has_access=0)
+// from ALL users of ALL chats (emergency lockdown).
 func (d *DB) RevokeAllAccess() error {
 	_, err := d.db.Exec("UPDATE users SET has_access = 0")
 	return err
@@ -866,7 +865,7 @@ func (d *DB) GetUserAccess(userID, chatID int64) (bool, error) {
 	return v != 0, err
 }
 
-// Возвращает 0, если пользователь никогда не писал в чат.
+// Returns 0 if the user never wrote in the chat.
 func (d *DB) GetUserIDByUsername(chatID int64, username string) (int64, error) {
 	var id int64
 	err := d.db.QueryRow(
@@ -890,10 +889,10 @@ func (d *DB) SetUserAccess(userID, chatID int64, hasAccess bool) error {
 	return err
 }
 
-// UserCanManage — может ли пользователь управлять серверами в чате.
+// UserCanManage - whether the user can manage servers in the chat.
 //
-// Владелец чата — всегда True (включая lockdown). Для остальных —
-// has_access=1 и lockdown выключен.
+// Chat owner is always True (including lockdown). For others -
+// has_access=1 and lockdown off.
 func (d *DB) UserCanManage(userID, chatID int64) (bool, error) {
 	chat, err := d.GetChat(chatID)
 	if err != nil || chat == nil {

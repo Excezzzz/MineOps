@@ -23,7 +23,7 @@ type Status struct {
 	PlayerNames   []string
 	PlayerList    []string
 	Version       string
-	Port          int // 0 — неизвестен
+	Port          int // 0 - unknown
 }
 
 const (
@@ -40,12 +40,12 @@ const (
 func emptyStatus(serverIP string) Status {
 	return Status{
 		IP:      serverIP,
-		Version: "Неизвестно",
+		Version: "unknown",
 	}
 }
 
-// allowLegacy=false: прокси Aternos отвечает на legacy-пинг даже на
-// оффлайн-серверах (фейковый «онлайн»).
+// allowLegacy=false: the Aternos proxy answers legacy pings even on
+// offline servers (fake "online").
 func GetServerStatus(serverIP string, port int, allowLegacy bool) Status {
 	if serverIP == "" {
 		return emptyStatus("")
@@ -128,7 +128,7 @@ func apiStatus(serverIP string) *Status {
 	}
 	version := data.Version
 	if version == "" {
-		version = "Неизвестно"
+		version = "unknown"
 	}
 	return &Status{
 		IP:            serverIP,
@@ -244,7 +244,7 @@ func modernSLP(host string, port int) *Status {
 	}
 	version := data.Version.Name
 	if version == "" {
-		version = "Неизвестно"
+		version = "unknown"
 	}
 	return &Status{
 		IP:            fmt.Sprintf("%s:%d", host, port),
@@ -309,7 +309,7 @@ func legacyPing(host string, port int) *Status {
 	}
 
 	var online, max int
-	version := "Неизвестно"
+	version := "unknown"
 	if len(fields) >= 6 && toInt(fields[1]) > 0 && !isAllDigits(fields[2]) {
 		online = toInt(fields[4])
 		max = toInt(fields[5])
@@ -365,10 +365,10 @@ func readVarint(data []byte) (int, error) {
 		}
 		shift += 7
 		if i >= 4 {
-			return 0, fmt.Errorf("varint слишком длинный")
+			return 0, fmt.Errorf("varint too long")
 		}
 	}
-	return 0, fmt.Errorf("varint не завершён")
+	return 0, fmt.Errorf("varint unterminated")
 }
 
 type httpClient struct {

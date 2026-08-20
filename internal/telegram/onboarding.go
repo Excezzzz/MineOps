@@ -35,7 +35,7 @@ func (bot *Bot) onSessionCookie(c tele.Context) {
 	if cookie == "" {
 		return
 	}
-	// Мгновенно удаляем сообщение с кукой.
+	// Immediately delete the message with the cookie.
 	_ = bot.b.Delete(m)
 
 	lang := i18n.Detect(m.Sender.LanguageCode)

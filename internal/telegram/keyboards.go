@@ -1,4 +1,4 @@
-// Package telegram — бот: хэндлеры, клавиатуры, FSM, мидлвари.
+// Package telegram — bot: handlers, keyboards, FSM, middlewares.
 package telegram
 
 import (
@@ -14,7 +14,7 @@ import (
 	"mineops/internal/i18n"
 )
 
-// Префиксы callback-данных: "prefix:field1:field2", bool-поля — "True"/"False".
+// Callback data prefixes: "prefix:field1:field2", bool fields — "True"/"False".
 const (
 	cbPanel       = "panel"   // panel:<action>
 	cbPanelServer = "psrv"    // psrv:<server_id>
@@ -27,7 +27,7 @@ const (
 	cbServer      = "srv"     // srv:<server_id>:<action>
 	cbReqAccess   = "req_acc" // req_acc:<chat_id>
 	cbApproveAcc  = "app_acc" // app_acc:<user_id>:<chat_id>:<approve True/False>
-	cbRunSrv      = "run_srv" // run_srv:<server_id>:<chat_id> — выбор сервера для /run
+	cbRunSrv      = "run_srv" // run_srv:<server_id>:<chat_id> — server picker for /run
 	cbOnboarding  = "onb"     // onb:<action>:<aternos_id>
 	cbRefreshDash = "refresh_dashboard"
 	cbNoop        = "noop"
@@ -37,8 +37,8 @@ func cbData(parts ...string) string {
 	return strings.Join(parts, ":")
 }
 
-// btnName укорачивает длинное имя сервера, чтобы кнопка не выходила за
-// границы сообщения (Telegram не переносит текст кнопки красиво).
+// btnName shortens a long server name so the button doesn't exceed the
+// message bounds (Telegram doesn't wrap button text nicely).
 func btnName(name string) string {
 	const maxLen = 24
 	r := []rune(name)
@@ -213,12 +213,12 @@ func deleteAccountKB(lang string) *tele.ReplyMarkup {
 	}}
 }
 
-// (инжектится в dashboard.New)
+// (injected into dashboard.New)
 func DashboardKB(servers []dashboard.DashServer, chatID int64, lang string) *tele.ReplyMarkup {
 	return dashboardKB(servers, chatID, lang)
 }
 
-// «✅ Подтвердить» — только при is_starting (сервер в очереди).
+// "✅ Confirm" — only when is_starting (server in queue).
 func dashboardKB(servers []dashboard.DashServer, chatID int64, lang string) *tele.ReplyMarkup {
 	rows := make([][]tele.InlineButton, 0, len(servers)+1)
 	for _, s := range servers {
@@ -261,7 +261,7 @@ func approveAccessKB(userID, chatID int64, lang string) *tele.ReplyMarkup {
 	}}
 }
 
-// Для /run в группе с несколькими серверами.
+// For /run in a group with multiple servers.
 func runServerPickerKB(servers []*database.Server, chatID int64, lang string) *tele.ReplyMarkup {
 	rows := make([][]tele.InlineButton, 0, len(servers)+1)
 	for _, s := range servers {
@@ -279,7 +279,7 @@ func runServerPickerKB(servers []*database.Server, chatID int64, lang string) *t
 
 const onbPageSize = 8
 
-// Чекбоксы выбора серверов, по 8 на страницу.
+// Server picker checkboxes, 8 per page.
 func serverPickerKB(servers []aternos.ServerBrief, selected map[string]bool, page int, lang string) *tele.ReplyMarkup {
 	total := len(servers)
 	pages := (total + onbPageSize - 1) / onbPageSize

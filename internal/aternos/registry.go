@@ -31,7 +31,7 @@ func NewRegistry(db *database.DB, httpClient *http.Client) *Registry {
 	return r
 }
 
-// (потокобезопасно, может быть заменён после старта бота)
+// (thread-safe, may be replaced after the bot starts)
 func (r *Registry) SetAuthHook(hook AuthFailureHook) {
 	r.mu.Lock()
 	r.authHook = hook

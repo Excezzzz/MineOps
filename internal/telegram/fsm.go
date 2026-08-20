@@ -2,7 +2,7 @@ package telegram
 
 import "sync"
 
-// Состояния FSM (ключ — user_id).
+// FSM states (key — user_id).
 const (
 	fsmNone             = ""
 	fsmOnbWaitingCookie = "onb:waiting_cookie"

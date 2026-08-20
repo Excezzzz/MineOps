@@ -21,7 +21,7 @@ type Config struct {
 	SessionCheck   int
 }
 
-// .env рядом с бинарником/рабочей директорией; валидирует обязательные поля.
+// .env next to the binary/working directory; validates required fields.
 func Load() (*Config, error) {
 	_ = godotenv.Load(".env")
 
@@ -29,16 +29,16 @@ func Load() (*Config, error) {
 	if token == "" {
 		return nil, fmt.Errorf("BOT_TOKEN is missing in .env")
 	}
-	// Суперадмин бота: SUPER_ADMIN_ID (legacy-алиас OWNER_ID). Получает
-	// уведомления об ошибках, может рассылать /announce. Остальные
-	// пользователи проходят онбординг через /start.
+	// Bot superadmin: SUPER_ADMIN_ID (legacy alias OWNER_ID). Receives
+	// error notifications, can send /announce. Other
+	// users go through onboarding via /start.
 	adminRaw := strings.TrimSpace(os.Getenv("SUPER_ADMIN_ID"))
 	if adminRaw == "" {
 		adminRaw = strings.TrimSpace(os.Getenv("OWNER_ID"))
 	}
 	adminID, err := strconv.ParseInt(adminRaw, 10, 64)
 	if err != nil || adminID <= 0 {
-		return nil, fmt.Errorf("SUPER_ADMIN_ID (или OWNER_ID) is missing or invalid in .env")
+		return nil, fmt.Errorf("SUPER_ADMIN_ID (or OWNER_ID) is missing or invalid in .env")
 	}
 
 	cfg := &Config{

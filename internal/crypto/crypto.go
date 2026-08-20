@@ -28,7 +28,7 @@ func Init(encryptionKey string) error {
 	if raw, err := os.ReadFile(keyFile); err == nil {
 		k, err := fernet.DecodeKey(string(raw))
 		if err != nil {
-			return fmt.Errorf("secret.key повреждён: %w", err)
+			return fmt.Errorf("secret.key corrupted: %w", err)
 		}
 		keys = []*fernet.Key{k}
 		return nil
@@ -53,7 +53,7 @@ func Init(encryptionKey string) error {
 	return nil
 }
 
-// Пустая строка остаётся пустой.
+// An empty string stays empty.
 func EncryptSession(plain string) string {
 	if plain == "" {
 		return ""
@@ -65,7 +65,7 @@ func EncryptSession(plain string) string {
 	return string(tok)
 }
 
-// Повреждённые данные дают пустую строку.
+// Corrupted data yields an empty string.
 func DecryptSession(encrypted string) string {
 	if encrypted == "" {
 		return ""
