@@ -14,6 +14,7 @@ import (
 	"mineops/internal/config"
 	"mineops/internal/dashboard"
 	"mineops/internal/database"
+	"mineops/internal/i18n"
 	"mineops/internal/queuewatcher"
 )
 
@@ -33,13 +34,15 @@ type Bot struct {
 
 	sessionNotifyMu   sync.Mutex
 	lastSessionNotify map[int64]time.Time // анти-спам уведомлений о просрочке куки
+
+	schedMu       sync.Mutex
+	lastSchedFire map[int64]string // дата последнего планового запуска (по владельцу)
 }
 
 const (
 	accessReqCooldown     = 5 * time.Minute
 	errNotifyMinGap       = time.Minute
 	sessionNotifyCooldown = 10 * time.Minute
-	msgLockdownBlocked    = "🚨 Включена экстренная блокировка. Запуск невозможен."
 )
 
 // NewBot создаёт и настраивает telebot.
@@ -55,6 +58,7 @@ func NewBot(cfg *config.Config, db *database.DB, managers *aternos.Registry,
 		fsm:               NewFSM(),
 		lastAccessReq:     make(map[int64]time.Time),
 		lastSessionNotify: make(map[int64]time.Time),
+		lastSchedFire:     make(map[int64]string),
 	}
 
 	pref := tele.Settings{
@@ -83,6 +87,20 @@ func NewBot(cfg *config.Config, db *database.DB, managers *aternos.Registry,
 					return nil
 				}
 				bot.registerUser(c)
+			}
+			// Автоудаление команд из группового чата (в ЛС сообщения остаются).
+			// /link и /unlink не удаляются — их ответы привязаны к контексту.
+			if c.Message() != nil && bot.isGroup(c) {
+				text := c.Message().Text
+				if strings.HasPrefix(text, "/") {
+					cmd := strings.Fields(text)[0]
+					if cmd != "/link" && cmd != "/unlink" {
+						defer func() {
+							time.Sleep(2 * time.Second) // дать время увидеть команду
+							_ = bot.b.Delete(c.Message())
+						}()
+					}
+				}
 			}
 			return next(c)
 		}
@@ -117,6 +135,10 @@ func (bot *Bot) registerHandlers() {
 	b.Handle("/announce", bot.cmdAnnounce)
 	b.Handle("/confirm", bot.cmdConfirm)
 	b.Handle("/players", bot.cmdPlayers)
+	b.Handle("/ping", bot.cmdPing)
+	b.Handle("/info", bot.cmdInfo)
+	b.Handle("/stats", bot.cmdStats)
+	b.Handle("/schedule", bot.cmdSchedule)
 
 	// Группы: /link, /unlink, /status, /run, /grant, /revoke
 	b.Handle("/link", bot.cmdLink)
@@ -138,19 +160,23 @@ func (bot *Bot) registerHandlers() {
 
 func (bot *Bot) setCommands() {
 	_ = bot.b.SetCommands(
-		tele.Command{Text: "start", Description: "Панель владельца / онбординг"},
-		tele.Command{Text: "panel", Description: "Панель владельца"},
-		tele.Command{Text: "help", Description: "Справка"},
-		tele.Command{Text: "status", Description: "Статус серверов (группа / ЛС)"},
-		tele.Command{Text: "run", Description: "Запустить серверы (группа / ЛС)"},
-		tele.Command{Text: "players", Description: "Игроки онлайн (группа / ЛС)"},
-		tele.Command{Text: "confirm", Description: "Подтвердить очередь запуска"},
-		tele.Command{Text: "link", Description: "Привязать чат (в группе, владелец)"},
-		tele.Command{Text: "unlink", Description: "Отвязать чат (в группе, владелец)"},
-		tele.Command{Text: "grant", Description: "Выдать доступ в чате (владелец)"},
-		tele.Command{Text: "revoke", Description: "Забрать доступ в чате (владелец)"},
-		tele.Command{Text: "set_session", Description: "Обновить куку Aternos"},
-		tele.Command{Text: "emergency", Description: "Локдаун вкл/выкл"},
+		tele.Command{Text: "start", Description: i18n.T("ru", "cmd_start")},
+		tele.Command{Text: "panel", Description: i18n.T("ru", "cmd_panel")},
+		tele.Command{Text: "help", Description: i18n.T("ru", "cmd_help")},
+		tele.Command{Text: "status", Description: i18n.T("ru", "cmd_status")},
+		tele.Command{Text: "run", Description: i18n.T("ru", "cmd_run")},
+		tele.Command{Text: "players", Description: i18n.T("ru", "cmd_players")},
+		tele.Command{Text: "ping", Description: i18n.T("ru", "cmd_ping")},
+		tele.Command{Text: "info", Description: i18n.T("ru", "cmd_info")},
+		tele.Command{Text: "stats", Description: i18n.T("ru", "cmd_stats")},
+		tele.Command{Text: "schedule", Description: i18n.T("ru", "cmd_schedule")},
+		tele.Command{Text: "confirm", Description: i18n.T("ru", "cmd_confirm")},
+		tele.Command{Text: "link", Description: i18n.T("ru", "cmd_link")},
+		tele.Command{Text: "unlink", Description: i18n.T("ru", "cmd_unlink")},
+		tele.Command{Text: "grant", Description: i18n.T("ru", "cmd_grant")},
+		tele.Command{Text: "revoke", Description: i18n.T("ru", "cmd_revoke")},
+		tele.Command{Text: "set_session", Description: i18n.T("ru", "cmd_set_session")},
+		tele.Command{Text: "emergency", Description: i18n.T("ru", "cmd_emergency")},
 	)
 }
 
@@ -221,11 +247,11 @@ func (bot *Bot) lockdownBlocked(c tele.Context, ownerID int64) bool {
 		return false
 	}
 	if cb := c.Callback(); cb != nil {
-		bot.answer(c, msgLockdownBlocked, true)
+		bot.answer(c, bot.lockdownMsg(c), true)
 		return true
 	}
 	if m := c.Message(); m != nil && m.Chat != nil {
-		_, _ = bot.b.Send(m.Chat, msgLockdownBlocked)
+		_, _ = bot.b.Send(m.Chat, bot.lockdownMsg(c))
 	}
 	return true
 }
@@ -247,7 +273,7 @@ func (bot *Bot) NotifySessionExpired(ownerID int64) {
 	bot.sessionNotifyMu.Unlock()
 
 	_, err := bot.b.Send(&tele.Chat{ID: ownerID},
-		"⚠️ <b>Внимание!</b> Сессия Aternos истекла. Скопируйте новую куку ATERNOS_SESSION и отправьте:\n<code>/set_session ВАША_КУКА</code>")
+		i18n.T(bot.ownerLang(ownerID), "sess_expired_notify"))
 	if err != nil {
 		log.Printf("не удалось уведомить владельца %d о сессии: %v", ownerID, err)
 	}

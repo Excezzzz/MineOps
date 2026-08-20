@@ -13,6 +13,7 @@ import (
 
 	"mineops/internal/dashboard"
 	"mineops/internal/database"
+	"mineops/internal/i18n"
 )
 
 // ------------------------------------------------------------------ //
@@ -38,20 +39,17 @@ func (bot *Bot) cmdLink(c tele.Context) error {
 		if !isOwner {
 			return nil // молча: только владелец сервера
 		}
+		lang := bot.uiLang(c)
 		chatID := m.Chat.ID
 		chat, _ := bot.db.GetChat(chatID)
 		if chat != nil && chat.OwnerID != uid {
-			_, err := bot.b.Send(m.Chat, "❌ Этот чат уже привязан к другому владельцу.")
+			_, err := bot.b.Send(m.Chat, i18n.T(lang, "link_already_other"))
 			return err
 		}
 		_, _ = bot.db.AddChat(chatID, uid, m.Chat.Title)
 		_ = bot.db.LogAction(uid, "chat_link", fmt.Sprintf("chat %d", chatID), 0, chatID, 0)
 		log.Printf("чат %d: владелец %d привязал чат (серверы — позже)", chatID, uid)
-		_, err := bot.b.Send(m.Chat,
-			"✅ Чат привязан!\n\n"+
-				"Теперь выберите, какие серверы будут доступны в этой группе:\n"+
-				"📱 ЛС с ботом → /panel → 💬 Чаты → «🔗 Серверы чата».\n\n"+
-				"Дашборд появится, как только вы подключите первый сервер.")
+		_, err := bot.b.Send(m.Chat, i18n.T(lang, "link_ok"))
 		return err
 	})
 }
@@ -64,17 +62,18 @@ func (bot *Bot) cmdUnlink(c tele.Context) error {
 		}
 		uid := m.Sender.ID
 		chatID := m.Chat.ID
+		lang := bot.uiLang(c)
 		isChatOwner, _ := bot.db.IsChatOwner(chatID, uid)
 		if !isChatOwner {
 			return nil
 		}
 		chat, _ := bot.db.GetChat(chatID)
 		if chat == nil {
-			_, err := bot.b.Send(m.Chat, "Чат не привязан.")
+			_, err := bot.b.Send(m.Chat, i18n.T(lang, "chat_not_linked_reply"))
 			return err
 		}
 		if chat.OwnerID != uid {
-			_, err := bot.b.Send(m.Chat, "❌ Только владелец чата может отвязать его.")
+			_, err := bot.b.Send(m.Chat, i18n.T(lang, "unlink_owner_only"))
 			return err
 		}
 		if chat.PinnedMsgID.Valid && chat.PinnedMsgID.Int64 > 0 {
@@ -82,7 +81,7 @@ func (bot *Bot) cmdUnlink(c tele.Context) error {
 		}
 		_ = bot.db.RemoveChat(chatID)
 		_ = bot.db.LogAction(uid, "chat_unlink", fmt.Sprintf("chat %d", chatID), 0, chatID, 0)
-		_, err := bot.b.Send(m.Chat, "✅ Чат отвязан. Дашборд остановлен.")
+		_, err := bot.b.Send(m.Chat, i18n.T(lang, "unlink_ok"))
 		return err
 	})
 }
@@ -95,6 +94,7 @@ func (bot *Bot) cmdStatus(c tele.Context) error {
 		}
 		uid := m.Sender.ID
 		chatID := m.Chat.ID
+		lang := bot.uiLang(c)
 
 		var ownerID int64
 		var servers []*database.Server
@@ -103,14 +103,14 @@ func (bot *Bot) cmdStatus(c tele.Context) error {
 		if bot.isPrivate(c) {
 			isOwner, _ := bot.db.IsOwner(uid)
 			if !isOwner {
-				_, err := bot.b.Send(m.Chat, "Сначала пройдите онбординг: /start.")
+				_, err := bot.b.Send(m.Chat, i18n.T(lang, "need_onboarding"))
 				return err
 			}
 			ownerID = uid
 			servers, _ = bot.db.GetActiveServersByOwner(uid)
 		} else if bot.isGroup(c) {
 			if !bot.canManage(uid, chatID) {
-				_, err := bot.b.Send(m.Chat, "У вас нет доступа к серверам этого чата.")
+				_, err := bot.b.Send(m.Chat, i18n.T(lang, "no_access_chat"))
 				return err
 			}
 			owner, err := bot.db.GetChatOwner(chatID)
@@ -125,7 +125,7 @@ func (bot *Bot) cmdStatus(c tele.Context) error {
 		}
 
 		if len(servers) == 0 {
-			_, err := bot.b.Send(m.Chat, "Нет подключённых серверов.")
+			_, err := bot.b.Send(m.Chat, i18n.T(lang, "no_servers"))
 			return err
 		}
 		if updateDash {
@@ -137,7 +137,7 @@ func (bot *Bot) cmdStatus(c tele.Context) error {
 		for _, s := range servers {
 			merged = append(merged, bot.dash.GetAuthoritativeStatus(ctx, ownerID, s))
 		}
-		_, err := bot.b.Send(m.Chat, bot.dash.FormatDashboardText(merged))
+		_, err := bot.b.Send(m.Chat, bot.dash.FormatDashboardText(merged, lang))
 		return err
 	})
 }
@@ -150,6 +150,7 @@ func (bot *Bot) cmdRun(c tele.Context) error {
 		}
 		uid := m.Sender.ID
 		chatID := m.Chat.ID
+		lang := bot.uiLang(c)
 
 		var ownerID int64
 		var servers []*database.Server
@@ -158,11 +159,11 @@ func (bot *Bot) cmdRun(c tele.Context) error {
 		if bot.isPrivate(c) {
 			isOwner, _ := bot.db.IsOwner(uid)
 			if !isOwner {
-				_, err := bot.b.Send(m.Chat, "Сначала пройдите онбординг: /start.")
+				_, err := bot.b.Send(m.Chat, i18n.T(lang, "need_onboarding"))
 				return err
 			}
 			if bot.lockdownActive(uid) {
-				_, _ = bot.b.Send(m.Chat, msgLockdownBlocked)
+				_, _ = bot.b.Send(m.Chat, i18n.T(lang, "lockdown_blocked"))
 				return nil
 			}
 			ownerID = uid
@@ -173,11 +174,11 @@ func (bot *Bot) cmdRun(c tele.Context) error {
 				return nil
 			}
 			if bot.lockdownActive(owner.UserID) {
-				_, _ = bot.b.Send(m.Chat, msgLockdownBlocked)
+				_, _ = bot.b.Send(m.Chat, i18n.T(lang, "lockdown_blocked"))
 				return nil
 			}
 			if !bot.canManage(uid, chatID) {
-				_, err := bot.b.Send(m.Chat, "У вас нет доступа к серверам этого чата.")
+				_, err := bot.b.Send(m.Chat, i18n.T(lang, "no_access_chat"))
 				return err
 			}
 			ownerID = owner.UserID
@@ -188,13 +189,13 @@ func (bot *Bot) cmdRun(c tele.Context) error {
 		}
 
 		if len(servers) == 0 {
-			_, err := bot.b.Send(m.Chat, "Нет подключённых серверов.")
+			_, err := bot.b.Send(m.Chat, i18n.T(lang, "no_servers"))
 			return err
 		}
 
 		// В группе с несколькими серверами — даём выбор, какой запустить.
 		if bot.isGroup(c) && len(servers) > 1 {
-			_, err := bot.b.Send(m.Chat, "▶️ <b>Какой сервер запустить?</b>", runServerPickerKB(servers, chatID))
+			_, err := bot.b.Send(m.Chat, i18n.T(lang, "run_pick"), runServerPickerKB(servers, chatID, lang))
 			return err
 		}
 
@@ -206,7 +207,7 @@ func (bot *Bot) cmdRun(c tele.Context) error {
 		for _, s := range servers {
 			text, err := manager.StartServer(ctx, s.ID)
 			if err != nil {
-				skipped = append(skipped, s.DisplayName+": "+friendlyStartError(err))
+				skipped = append(skipped, s.DisplayName+": "+friendlyStartError(err, lang))
 				continue
 			}
 			started = append(started, s.DisplayName)
@@ -226,20 +227,20 @@ func (bot *Bot) cmdRun(c tele.Context) error {
 
 		var lines []string
 		if len(started) > 0 {
-			lines = append(lines, "🚀 <b>Запуск запрошен:</b> "+strings.Join(started, ", "))
+			lines = append(lines, i18n.T(lang, "run_started", strings.Join(started, ", ")))
 		}
 		if len(skipped) > 0 {
-			lines = append(lines, "⏳ <b>Пропущены:</b> "+strings.Join(skipped, "; "))
+			lines = append(lines, i18n.T(lang, "run_skipped", strings.Join(skipped, "; ")))
 		}
 		if len(lines) == 0 {
-			lines = append(lines, "Ничего не запущено.")
+			lines = append(lines, i18n.T(lang, "run_none"))
 		}
 		_, err := bot.b.Send(m.Chat, strings.Join(lines, "\n"))
 		return err
 	})
 }
 
-// cmdPlayers — список игроков онлайн (ЛС / группа).
+// cmdPlayers — список игроков онлайн (ЛС / группа, в группе — автоудаление).
 func (bot *Bot) cmdPlayers(c tele.Context) error {
 	return bot.SafeCall(func() error {
 		m := c.Message()
@@ -248,6 +249,7 @@ func (bot *Bot) cmdPlayers(c tele.Context) error {
 		}
 		uid := m.Sender.ID
 		chatID := m.Chat.ID
+		lang := bot.uiLang(c)
 
 		var ownerID int64
 		var servers []*database.Server
@@ -255,14 +257,14 @@ func (bot *Bot) cmdPlayers(c tele.Context) error {
 		if bot.isPrivate(c) {
 			isOwner, _ := bot.db.IsOwner(uid)
 			if !isOwner {
-				_, err := bot.b.Send(m.Chat, "Сначала пройдите онбординг: /start.")
+				_, err := bot.b.Send(m.Chat, i18n.T(lang, "need_onboarding"))
 				return err
 			}
 			ownerID = uid
 			servers, _ = bot.db.GetActiveServersByOwner(uid)
 		} else if bot.isGroup(c) {
 			if !bot.canManage(uid, chatID) {
-				_, err := bot.b.Send(m.Chat, "У вас нет доступа к серверам этого чата.")
+				_, err := bot.b.Send(m.Chat, i18n.T(lang, "no_access_chat"))
 				return err
 			}
 			owner, err := bot.db.GetChatOwner(chatID)
@@ -289,18 +291,20 @@ func (bot *Bot) cmdPlayers(c tele.Context) error {
 			}
 			lines = append(lines,
 				"🖥 <b>"+html.EscapeString(name)+"</b>",
-				fmt.Sprintf("👥 Игроки (%d/%d):", st.PlayersOnline, st.PlayersMax))
+				i18n.T(lang, "players_title", st.PlayersOnline, st.PlayersMax))
 			for _, p := range st.PlayerList {
 				lines = append(lines, "• "+html.EscapeString(p))
 			}
 			lines = append(lines, "")
 		}
 		if len(lines) == 0 {
-			_, err := bot.b.Send(m.Chat, "На серверах нет игроков.")
+			msg, err := bot.b.Send(m.Chat, i18n.T(lang, "players_none"))
+			bot.autoDeleteInGroup(c, msg, 30)
 			return err
 		}
 		text := strings.TrimSpace(strings.Join(lines, "\n"))
-		_, err := bot.b.Send(m.Chat, text)
+		msg, err := bot.b.Send(m.Chat, text)
+		bot.autoDeleteInGroup(c, msg, 30)
 		return err
 	})
 }
@@ -325,6 +329,7 @@ func (bot *Bot) setAccessCmd(c tele.Context, grant bool) error {
 	}
 	uid := m.Sender.ID
 	chatID := m.Chat.ID
+	lang := bot.uiLang(c)
 	isChatOwner, _ := bot.db.IsChatOwner(chatID, uid)
 	if !isChatOwner {
 		return nil // молча: только владелец чата
@@ -334,7 +339,7 @@ func (bot *Bot) setAccessCmd(c tele.Context, grant bool) error {
 	if !grant {
 		verb = "/revoke"
 	}
-	usage := fmt.Sprintf("Использование: %s @username или %s user_id", verb, verb)
+	usage := i18n.T(lang, "access_usage", verb, verb)
 
 	parts := strings.Fields(m.Text)
 	if len(parts) < 2 {
@@ -363,9 +368,7 @@ func (bot *Bot) setAccessCmd(c tele.Context, grant bool) error {
 		}
 		if id == 0 {
 			_, err := bot.b.Send(m.Chat,
-				"❌ Пользователь @"+html.EscapeString(raw)+" не найден. "+
-					"Пусть он напишет сообщение в этот чат (для регистрации), "+
-					"или укажите user_id напрямую: "+verb+" <code>123456789</code>")
+				i18n.T(lang, "user_not_found", html.EscapeString(raw), verb))
 			return err
 		}
 		targetID = id
@@ -379,13 +382,13 @@ func (bot *Bot) setAccessCmd(c tele.Context, grant bool) error {
 		_ = bot.db.SetUserAccess(targetID, chatID, true)
 		_ = bot.db.LogAction(uid, "access_grant",
 			fmt.Sprintf("user %d (@%s)", targetID, raw), targetID, chatID, 0)
-		_, err := bot.b.Send(m.Chat, "✅ "+html.EscapeString(display)+" получил доступ к серверам.")
+		_, err := bot.b.Send(m.Chat, i18n.T(lang, "access_granted", html.EscapeString(display)))
 		return err
 	}
 	_ = bot.db.SetUserAccess(targetID, chatID, false)
 	_ = bot.db.LogAction(uid, "access_revoke",
 		fmt.Sprintf("user %d (@%s)", targetID, raw), targetID, chatID, 0)
-	_, err := bot.b.Send(m.Chat, "🚫 "+html.EscapeString(display)+" больше не может управлять серверами.")
+	_, err := bot.b.Send(m.Chat, i18n.T(lang, "access_revoked", html.EscapeString(display)))
 	return err
 }
 
@@ -398,6 +401,7 @@ func (bot *Bot) cmdConfirm(c tele.Context) error {
 		}
 		uid := m.Sender.ID
 		chatID := m.Chat.ID
+		lang := bot.uiLang(c)
 
 		var ownerID int64
 		var servers []*database.Server
@@ -406,11 +410,11 @@ func (bot *Bot) cmdConfirm(c tele.Context) error {
 		if bot.isPrivate(c) {
 			isOwner, _ := bot.db.IsOwner(uid)
 			if !isOwner {
-				_, err := bot.b.Send(m.Chat, "Сначала пройдите онбординг: /start.")
+				_, err := bot.b.Send(m.Chat, i18n.T(lang, "need_onboarding"))
 				return err
 			}
 			if bot.lockdownActive(uid) {
-				_, _ = bot.b.Send(m.Chat, msgLockdownBlocked)
+				_, _ = bot.b.Send(m.Chat, i18n.T(lang, "lockdown_blocked"))
 				return nil
 			}
 			ownerID = uid
@@ -421,11 +425,11 @@ func (bot *Bot) cmdConfirm(c tele.Context) error {
 				return nil
 			}
 			if bot.lockdownActive(owner.UserID) {
-				_, _ = bot.b.Send(m.Chat, msgLockdownBlocked)
+				_, _ = bot.b.Send(m.Chat, i18n.T(lang, "lockdown_blocked"))
 				return nil
 			}
 			if !bot.canManage(uid, chatID) {
-				_, err := bot.b.Send(m.Chat, "У вас нет доступа к серверам этого чата.")
+				_, err := bot.b.Send(m.Chat, i18n.T(lang, "no_access_chat"))
 				return err
 			}
 			ownerID = owner.UserID
@@ -436,7 +440,7 @@ func (bot *Bot) cmdConfirm(c tele.Context) error {
 		}
 
 		if len(servers) == 0 {
-			_, err := bot.b.Send(m.Chat, "Нет подключённых серверов.")
+			_, err := bot.b.Send(m.Chat, i18n.T(lang, "no_servers"))
 			return err
 		}
 
@@ -457,13 +461,13 @@ func (bot *Bot) cmdConfirm(c tele.Context) error {
 
 		var lines []string
 		if len(confirmed) > 0 {
-			lines = append(lines, "✅ <b>Запуск подтверждён:</b> "+strings.Join(confirmed, ", "))
+			lines = append(lines, i18n.T(lang, "confirm_ok_list", strings.Join(confirmed, ", ")))
 		}
 		if len(skipped) > 0 {
-			lines = append(lines, "⏳ <b>Не подтверждены (нет очереди/ошибка):</b> "+strings.Join(skipped, ", "))
+			lines = append(lines, i18n.T(lang, "confirm_skipped_list", strings.Join(skipped, ", ")))
 		}
 		if len(lines) == 0 {
-			lines = append(lines, "Ничего не подтверждено.")
+			lines = append(lines, i18n.T(lang, "confirm_none"))
 		}
 		_, err := bot.b.Send(m.Chat, strings.Join(lines, "\n"))
 		return err
@@ -480,22 +484,23 @@ func (bot *Bot) cbRunServer(c tele.Context, parts []string) error {
 	serverID := cbInt(parts, 1)
 	chatID := cbInt(parts, 2)
 	uid := cb.Sender.ID
+	lang := bot.uiLang(c)
 
 	owner, err := bot.db.GetChatOwner(chatID)
 	if err != nil || owner == nil {
-		bot.answer(c, "Чат не привязан к владельцу.", false)
+		bot.answer(c, i18n.T(lang, "chat_not_linked"), false)
 		return nil
 	}
 	if bot.lockdownBlocked(c, owner.UserID) {
 		return nil
 	}
 	if !bot.canManage(uid, chatID) {
-		bot.answer(c, "У вас нет доступа к серверам этого чата.", false)
+		bot.answer(c, i18n.T(lang, "no_access_chat"), false)
 		return nil
 	}
 	server, _ := bot.db.GetServer(serverID)
 	if server == nil || server.OwnerID != owner.UserID {
-		bot.answer(c, "Сервер не найден.", false)
+		bot.answer(c, i18n.T(lang, "server_not_found"), false)
 		return nil
 	}
 
@@ -505,7 +510,7 @@ func (bot *Bot) cbRunServer(c tele.Context, parts []string) error {
 
 	text, err := manager.StartServer(ctx, serverID)
 	if err != nil {
-		bot.answer(c, friendlyStartError(err), true)
+		bot.answer(c, friendlyStartError(err, lang), true)
 		return nil
 	}
 	bot.dash.MarkAsStarting(300)
@@ -523,29 +528,13 @@ func (bot *Bot) cmdGroupHelp(c tele.Context) error {
 		}
 		uid := m.Sender.ID
 		chatID := m.Chat.ID
+		lang := bot.uiLang(c)
 		owner, _ := bot.db.GetChatOwner(chatID)
 		if owner != nil && owner.UserID == uid {
-			_, err := bot.b.Send(m.Chat,
-				"<b>Команды владельца чата:</b>\n"+
-					"/link — привязать чат (серверы выбираются в ЛС)\n"+
-					"/unlink — отвязать чат\n"+
-					"/status — статус серверов чата\n"+
-					"/players — игроки онлайн\n"+
-					"/run — запустить серверы чата\n"+
-					"/grant @username — выдать доступ\n"+
-					"/revoke @username — забрать доступ\n"+
-					"/emergency — локдаун (в ЛС с ботом)\n\n"+
-					"<b>Кнопки дашборда:</b>\n"+
-					"▶️ Старт · ⏹ Стоп · ✅ Подтвердить (появляется, когда сервер в очереди)\n"+
-					"Также доступно: /confirm — подтвердить очередь вручную")
+			_, err := bot.b.Send(m.Chat, i18n.T(lang, "help_group_owner"))
 			return err
 		}
-		_, err := bot.b.Send(m.Chat,
-			"<b>Доступные действия:</b>\n"+
-				"/status — статус серверов чата\n"+
-				"/run — запустить серверы чата\n"+
-				"🙋 Запросить доступ — кнопка под дашбордом\n\n"+
-				"Управление серверами доступно владельцу и одобренным участникам.")
+		_, err := bot.b.Send(m.Chat, i18n.T(lang, "help_group_user"))
 		return err
 	})
 }
@@ -580,6 +569,22 @@ func (bot *Bot) toast(c tele.Context, text string, seconds int) {
 	}()
 }
 
+// autoDeleteInGroup — автоудаление команды и её ответа в групповом чате
+// (в ЛС сообщения остаются).
+func (bot *Bot) autoDeleteInGroup(c tele.Context, msg *tele.Message, seconds int) {
+	if !bot.isGroup(c) || msg == nil {
+		return
+	}
+	m := c.Message()
+	go func() {
+		time.Sleep(time.Duration(seconds) * time.Second)
+		if m != nil {
+			_ = bot.b.Delete(m)
+		}
+		_ = bot.b.Delete(msg)
+	}()
+}
+
 // ------------------------------------------------------------------ //
 // кнопки дашборда: старт/стоп/подтверждение
 // ------------------------------------------------------------------ //
@@ -593,21 +598,22 @@ func (bot *Bot) requireChatPermission(c tele.Context) (int64, bool) {
 		return 0, false
 	}
 	chatID := cb.Message.Chat.ID
+	lang := bot.uiLang(c)
 	owner, err := bot.db.GetChatOwner(chatID)
 	if err != nil || owner == nil {
-		bot.answer(c, "Чат не привязан к владельцу.", false)
+		bot.answer(c, i18n.T(lang, "chat_not_linked"), false)
 		return 0, false
 	}
 	if owner.UserID == cb.Sender.ID {
 		return owner.UserID, true
 	}
 	if owner.LockdownMode {
-		bot.answer(c, msgLockdownBlocked, false)
+		bot.answer(c, i18n.T(lang, "lockdown_blocked"), false)
 		return 0, false
 	}
 	ok, _ := bot.db.UserCanManage(cb.Sender.ID, chatID)
 	if !ok {
-		bot.answer(c, "У вас нет доступа. Нажмите «🙋 Запросить доступ».", false)
+		bot.answer(c, i18n.T(lang, "no_access_hint"), false)
 		return 0, false
 	}
 	return owner.UserID, true
@@ -619,8 +625,9 @@ func (bot *Bot) cbServerAction(c tele.Context, parts []string) error {
 		return c.Respond(&tele.CallbackResponse{})
 	}
 	bot.answer(c, "", false)
+	lang := bot.uiLang(c)
 	if cb.Message.Chat.Type == tele.ChatPrivate {
-		bot.answer(c, "Кнопки дашборда работают в групповом чате.", false)
+		bot.answer(c, i18n.T(lang, "btn_works_group"), false)
 		return nil
 	}
 	ownerID, ok := bot.requireChatPermission(c)
@@ -642,78 +649,52 @@ func (bot *Bot) cbServerAction(c tele.Context, parts []string) error {
 		}
 		text, err := manager.StartServer(ctx, serverID)
 		if err != nil {
-			bot.answer(c, friendlyStartError(err), true)
+			bot.answer(c, friendlyStartError(err, lang), true)
 			return nil
 		}
 		bot.dash.MarkAsStarting(300)
-		bot.answer(c, text, false)
 		bot.watcher.Start(bot.b, ownerID, serverID)
+		bot.answer(c, text, false)
 		bot.dash.UpdateChatsDashboards(context.Background(), bot.b, []int64{chatID})
-		bot.broadcastOthers(ownerID, chatID, "🚀 <b>"+text+"</b>")
 	case "stop":
 		text, err := manager.StopServer(ctx, serverID)
 		if err != nil {
-			bot.answer(c, err.Error(), true)
+			bot.answer(c, friendlyStartError(err, lang), true)
 			return nil
 		}
 		bot.dash.ClearQueuePosition(serverID)
 		bot.answer(c, text, false)
 		bot.dash.UpdateChatsDashboards(context.Background(), bot.b, []int64{chatID})
-		bot.broadcastOthers(ownerID, chatID, "🛑 <b>"+text+"</b>")
 	case "confirm":
 		if bot.lockdownBlocked(c, ownerID) {
 			return nil
 		}
 		if err := manager.ConfirmServer(ctx, serverID); err != nil {
-			bot.answer(c, err.Error(), true)
+			bot.answer(c, friendlyStartError(err, lang), true)
 			return nil
 		}
 		bot.dash.ClearQueuePosition(serverID)
-		bot.answer(c, "✅ Запуск подтверждён.", false)
+		bot.answer(c, i18n.T(lang, "confirm_ok"), false)
 		bot.dash.UpdateChatsDashboards(context.Background(), bot.b, []int64{chatID})
 	}
 	return nil
 }
 
-// friendlyStartError — дружелюбное описание ошибки запуска: если сервер
-// уже запускается или оффлайн, пользователю показывается нейтральное
-// сообщение без сырых деталей и без каких-либо уведомлений Владельцу.
-func friendlyStartError(err error) string {
-	msg := strings.ToLower(err.Error())
-	switch {
-	case strings.Contains(msg, "already"):
-		return "⏳ Сервер уже запускается, ожидайте."
-	case strings.Contains(msg, "cloudflare"):
-		return "⚠️ Aternos временно ограничивает запросы, попробуйте позже."
-	case strings.Contains(msg, "session"):
-		return "⚠️ Сессия Aternos истекла, сообщите владельцу."
-	}
-	return "❌ Сервер недоступен, ожидайте."
-}
-
-func (bot *Bot) broadcastOthers(ownerID, exceptChatID int64, text string) {
-	chats, _ := bot.db.GetChatsByOwner(ownerID)
-	other := make([]int64, 0, len(chats))
-	for _, ch := range chats {
-		if ch.ChatID != exceptChatID {
-			other = append(other, ch.ChatID)
-		}
-	}
-	bot.dash.BroadcastMessage(bot.b, other, text)
-}
-
 func (bot *Bot) cbRefreshDashboard(c tele.Context) error {
 	cb := c.Callback()
-	if cb == nil || cb.Message == nil {
+	if cb == nil || cb.Message == nil || cb.Message.Chat == nil || cb.Sender == nil {
 		return c.Respond(&tele.CallbackResponse{})
 	}
-	bot.answer(c, "", false) // мгновенно убираем спиннер
-	if cb.Message.Chat.Type == tele.ChatPrivate || cb.Sender == nil {
+	bot.answer(c, "", false)
+	lang := bot.uiLang(c)
+	chatID := cb.Message.Chat.ID
+	if cb.Message.Chat.Type == tele.ChatPrivate {
+		bot.answer(c, i18n.T(lang, "btn_works_group"), false)
 		return nil
 	}
-	chatID := cb.Message.Chat.ID
-	owner, err := bot.db.GetChatOwner(chatID)
-	if err != nil || owner == nil {
+	owner, _ := bot.db.GetChatOwner(chatID)
+	if owner == nil {
+		bot.answer(c, i18n.T(lang, "chat_not_linked"), false)
 		return nil
 	}
 	if owner.UserID != cb.Sender.ID {
@@ -723,7 +704,7 @@ func (bot *Bot) cbRefreshDashboard(c tele.Context) error {
 		}
 	}
 	bot.dash.UpdateChatsDashboards(context.Background(), bot.b, []int64{chatID})
-	bot.answer(c, "🔄 Дашборд обновлён.", false)
+	bot.answer(c, i18n.T(lang, "dash_updated"), false)
 	return nil
 }
 
@@ -739,19 +720,20 @@ func (bot *Bot) cbRequestAccess(c tele.Context, parts []string) error {
 	bot.answer(c, "", false)
 	uid := cb.Sender.ID
 	chatID := cbInt(parts, 1)
+	lang := bot.uiLang(c)
 
 	owner, err := bot.db.GetChatOwner(chatID)
 	if err != nil || owner == nil {
-		bot.answer(c, "Чат не привязан к владельцу.", false)
+		bot.answer(c, i18n.T(lang, "chat_not_linked"), false)
 		return nil
 	}
 	if owner.UserID == uid {
-		bot.answer(c, "Вы — владелец этого чата 😉", false)
+		bot.answer(c, i18n.T(lang, "you_are_owner"), false)
 		return nil
 	}
-	ok, _ := bot.db.UserCanManage(chatID, uid)
+	ok, _ := bot.db.UserCanManage(uid, chatID)
 	if ok {
-		bot.answer(c, "У вас уже есть доступ.", false)
+		bot.answer(c, i18n.T(lang, "already_has_access"), false)
 		return nil
 	}
 
@@ -759,7 +741,7 @@ func (bot *Bot) cbRequestAccess(c tele.Context, parts []string) error {
 	last := bot.lastAccessReq[uid]
 	bot.mu.Unlock()
 	if time.Since(last) < accessReqCooldown {
-		bot.answer(c, "Запрос уже отправлен — подождите 5 минут.", false)
+		bot.answer(c, i18n.T(lang, "access_cooldown"), false)
 		return nil
 	}
 	bot.mu.Lock()
@@ -773,17 +755,18 @@ func (bot *Bot) cbRequestAccess(c tele.Context, parts []string) error {
 		chatTitle = cb.Message.Chat.Title
 	}
 	_, err = bot.b.Send(&tele.Chat{ID: owner.UserID},
-		"🙋 <b>Запрос доступа</b>\n"+
-			"Чат: "+chatTitle+" ("+strconv.FormatInt(chatID, 10)+")\n"+
-			"Пользователь: "+html.EscapeString(cb.Sender.FirstName+" "+cb.Sender.LastName)+
-			" (@<code>"+html.EscapeString(cb.Sender.Username)+"</code>)",
-		approveAccessKB(uid, chatID))
+		i18n.T(bot.ownerLang(owner.UserID), "access_req_title",
+			chatTitle,
+			chatID,
+			html.EscapeString(cb.Sender.FirstName+" "+cb.Sender.LastName),
+			html.EscapeString(cb.Sender.Username)),
+		approveAccessKB(uid, chatID, bot.ownerLang(owner.UserID)))
 	if err != nil {
 		log.Printf("не удалось доставить запрос владельцу %d: %v", owner.UserID, err)
-		bot.answer(c, "Не удалось отправить запрос владельцу.", false)
+		bot.answer(c, i18n.T(lang, "access_req_fail"), false)
 		return nil
 	}
-	bot.answer(c, "Запрос отправлен владельцу.", false)
+	bot.answer(c, i18n.T(lang, "access_req_sent"), false)
 	return nil
 }
 
@@ -797,10 +780,11 @@ func (bot *Bot) cbApproveAccess(c tele.Context, parts []string) error {
 	userID := cbInt(parts, 1)
 	chatID := cbInt(parts, 2)
 	approve := parseBool(cbStr(parts, 3))
+	lang := bot.uiLang(c)
 
 	owner, err := bot.db.GetChatOwner(chatID)
 	if err != nil || owner == nil || owner.UserID != uid {
-		bot.answer(c, "Только владелец чата может решать этот запрос.", false)
+		bot.answer(c, i18n.T(lang, "access_only_owner"), false)
 		return nil
 	}
 
@@ -808,15 +792,14 @@ func (bot *Bot) cbApproveAccess(c tele.Context, parts []string) error {
 		_ = bot.db.SetUserAccess(userID, chatID, true)
 		_ = bot.db.LogAction(owner.UserID, "access_grant",
 			fmt.Sprintf("user %d", userID), userID, chatID, 0)
-		_ = bot.edit(cb.Message, cb.Message.Text+"\n\n✅ <b>Доступ одобрен.</b>", nil)
+		_ = bot.edit(cb.Message, cb.Message.Text+i18n.T(lang, "access_approved_edit"), nil)
 		_, _ = bot.b.Send(&tele.Chat{ID: userID},
-			"✅ Вам выдан доступ к серверам чата «"+cb.Message.Chat.Title+"».")
-		_, _ = bot.b.Send(&tele.Chat{ID: chatID},
-			"✅ Доступ одобрен. Пользователь может управлять серверами чата.")
+			i18n.T(bot.userLang(userID), "access_approved_pm", cb.Message.Chat.Title))
+		_, _ = bot.b.Send(&tele.Chat{ID: chatID}, i18n.T(lang, "access_approved_chat"))
 	} else {
 		_ = bot.db.LogAction(owner.UserID, "access_deny",
 			fmt.Sprintf("user %d", userID), userID, chatID, 0)
-		_ = bot.edit(cb.Message, cb.Message.Text+"\n\n❌ <b>Отклонено.</b>", nil)
+		_ = bot.edit(cb.Message, cb.Message.Text+i18n.T(lang, "access_denied_edit"), nil)
 	}
 	return nil
 }
@@ -842,4 +825,24 @@ func (bot *Bot) onText(c tele.Context) error {
 		}
 		return nil
 	})
+}
+
+// ------------------------------------------------------------------ //
+// дружелюбные ошибки запуска
+// ------------------------------------------------------------------ //
+
+// friendlyStartError — дружелюбное описание ошибки запуска: если сервер
+// уже запускается или оффлайн, пользователю показывается нейтральное
+// сообщение без сырых деталей и без каких-либо уведомлений Владельцу.
+func friendlyStartError(err error, lang string) string {
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "already"):
+		return i18n.T(lang, "friendly_already")
+	case strings.Contains(msg, "cloudflare"):
+		return i18n.T(lang, "friendly_cloudflare")
+	case strings.Contains(msg, "session"):
+		return i18n.T(lang, "friendly_session")
+	}
+	return i18n.T(lang, "friendly_unavailable")
 }

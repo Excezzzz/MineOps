@@ -11,6 +11,7 @@ import (
 	"mineops/internal/aternos"
 	"mineops/internal/dashboard"
 	"mineops/internal/database"
+	"mineops/internal/i18n"
 )
 
 // Префиксы callback-данных (формат aiogram: "prefix:field1:field2",
@@ -52,20 +53,20 @@ func btnName(name string) string {
 // панель владельца
 // ------------------------------------------------------------------ //
 
-func ownerPanelKB() *tele.ReplyMarkup {
+func ownerPanelKB(lang string) *tele.ReplyMarkup {
 	rows := [][]tele.InlineButton{
-		{{Text: "🖥 Серверы", Data: cbData(cbPanel, "servers")}},
-		{{Text: "💬 Чаты", Data: cbData(cbPanel, "chats")}},
-		{{Text: "⚙️ Настройки", Data: cbData(cbPanel, "settings")}},
-		{{Text: "📋 Аудит", Data: cbData(cbPanel, "audit")}},
-		{{Text: "🔄 Обновить серверы", Data: cbData(cbPanel, "refresh_servers")}},
-		{{Text: "🔄 Обновить куку", Data: cbData(cbPanel, "refresh_session")}},
-		{{Text: "🗑 Удалить аккаунт", Data: cbData(cbPanel, "delete_account")}},
+		{{Text: i18n.T(lang, "btn_servers"), Data: cbData(cbPanel, "servers")}},
+		{{Text: i18n.T(lang, "btn_chats"), Data: cbData(cbPanel, "chats")}},
+		{{Text: i18n.T(lang, "btn_settings"), Data: cbData(cbPanel, "settings")}},
+		{{Text: i18n.T(lang, "btn_audit"), Data: cbData(cbPanel, "audit")}},
+		{{Text: i18n.T(lang, "btn_refresh_servers"), Data: cbData(cbPanel, "refresh_servers")}},
+		{{Text: i18n.T(lang, "btn_refresh_cookie"), Data: cbData(cbPanel, "refresh_session")}},
+		{{Text: i18n.T(lang, "btn_delete_account"), Data: cbData(cbPanel, "delete_account")}},
 	}
 	return &tele.ReplyMarkup{InlineKeyboard: rows}
 }
 
-func ownerServersKB(servers []*database.Server) *tele.ReplyMarkup {
+func ownerServersKB(servers []*database.Server, lang string) *tele.ReplyMarkup {
 	rows := make([][]tele.InlineButton, 0, len(servers)+1)
 	for _, s := range servers {
 		rows = append(rows, []tele.InlineButton{{
@@ -74,39 +75,39 @@ func ownerServersKB(servers []*database.Server) *tele.ReplyMarkup {
 		}})
 	}
 	if len(servers) == 0 {
-		rows = append(rows, []tele.InlineButton{{Text: "(серверов нет)", Data: cbNoop}})
+		rows = append(rows, []tele.InlineButton{{Text: i18n.T(lang, "btn_no_servers"), Data: cbNoop}})
 	}
-	rows = append(rows, []tele.InlineButton{{Text: "🔙 Назад", Data: cbData(cbPanel, "back")}})
+	rows = append(rows, []tele.InlineButton{{Text: i18n.T(lang, "btn_back"), Data: cbData(cbPanel, "back")}})
 	return &tele.ReplyMarkup{InlineKeyboard: rows}
 }
 
-func serverCardKB(serverID int64, isOnline bool) *tele.ReplyMarkup {
+func serverCardKB(serverID int64, isOnline bool, lang string) *tele.ReplyMarkup {
 	actionRow := []tele.InlineButton{}
 	if isOnline {
 		actionRow = append(actionRow, tele.InlineButton{
-			Text: "⏹ Стоп", Data: cbData(cbPanelAction, strconv.FormatInt(serverID, 10), "stop"),
+			Text: i18n.T(lang, "btn_stop"), Data: cbData(cbPanelAction, strconv.FormatInt(serverID, 10), "stop"),
 		})
 	} else {
 		actionRow = append(actionRow,
 			tele.InlineButton{
-				Text: "▶️ Старт", Data: cbData(cbPanelAction, strconv.FormatInt(serverID, 10), "start"),
+				Text: i18n.T(lang, "btn_start"), Data: cbData(cbPanelAction, strconv.FormatInt(serverID, 10), "start"),
 			},
 			tele.InlineButton{
-				Text: "✅ Подтвердить", Data: cbData(cbPanelAction, strconv.FormatInt(serverID, 10), "confirm"),
+				Text: i18n.T(lang, "btn_confirm"), Data: cbData(cbPanelAction, strconv.FormatInt(serverID, 10), "confirm"),
 			},
 		)
 	}
 	rows := [][]tele.InlineButton{
 		actionRow,
 		{
-			{Text: "🗑 Удалить", Data: cbData(cbPanelAction, strconv.FormatInt(serverID, 10), "delete")},
-			{Text: "🔙 К серверам", Data: cbData(cbPanel, "servers")},
+			{Text: i18n.T(lang, "btn_delete"), Data: cbData(cbPanelAction, strconv.FormatInt(serverID, 10), "delete")},
+			{Text: i18n.T(lang, "btn_to_servers"), Data: cbData(cbPanel, "servers")},
 		},
 	}
 	return &tele.ReplyMarkup{InlineKeyboard: rows}
 }
 
-func ownerChatsKB(chats []*database.Chat) *tele.ReplyMarkup {
+func ownerChatsKB(chats []*database.Chat, lang string) *tele.ReplyMarkup {
 	rows := make([][]tele.InlineButton, 0, len(chats)+1)
 	for _, ch := range chats {
 		title := ch.Title
@@ -119,13 +120,13 @@ func ownerChatsKB(chats []*database.Chat) *tele.ReplyMarkup {
 		}})
 	}
 	if len(chats) == 0 {
-		rows = append(rows, []tele.InlineButton{{Text: "(чатов нет)", Data: cbNoop}})
+		rows = append(rows, []tele.InlineButton{{Text: i18n.T(lang, "btn_no_chats"), Data: cbNoop}})
 	}
-	rows = append(rows, []tele.InlineButton{{Text: "🔙 Назад", Data: cbData(cbPanel, "back")}})
+	rows = append(rows, []tele.InlineButton{{Text: i18n.T(lang, "btn_back"), Data: cbData(cbPanel, "back")}})
 	return &tele.ReplyMarkup{InlineKeyboard: rows}
 }
 
-func chatCardKB(chatID int64, servers []*database.Server, linkedIDs map[int64]bool) *tele.ReplyMarkup {
+func chatCardKB(chatID int64, servers []*database.Server, linkedIDs map[int64]bool, lang string) *tele.ReplyMarkup {
 	rows := make([][]tele.InlineButton, 0, len(servers)+3)
 	for _, s := range servers {
 		linked := linkedIDs[s.ID]
@@ -142,19 +143,19 @@ func chatCardKB(chatID int64, servers []*database.Server, linkedIDs map[int64]bo
 		}})
 	}
 	if len(servers) == 0 {
-		rows = append(rows, []tele.InlineButton{{Text: "(серверов нет)", Data: cbNoop}})
+		rows = append(rows, []tele.InlineButton{{Text: i18n.T(lang, "btn_no_servers"), Data: cbNoop}})
 	}
 	rows = append(rows, []tele.InlineButton{{
-		Text: "👥 Участники", Data: cbData(cbPanelChat, strconv.FormatInt(chatID, 10), "users"),
+		Text: i18n.T(lang, "btn_users"), Data: cbData(cbPanelChat, strconv.FormatInt(chatID, 10), "users"),
 	}})
 	rows = append(rows, []tele.InlineButton{
-		{Text: "🗑 Отвязать чат", Data: cbData(cbPanelChat, strconv.FormatInt(chatID, 10), "unlink")},
-		{Text: "🔙 К чатам", Data: cbData(cbPanel, "chats")},
+		{Text: i18n.T(lang, "btn_unlink_chat"), Data: cbData(cbPanelChat, strconv.FormatInt(chatID, 10), "unlink")},
+		{Text: i18n.T(lang, "btn_to_chats"), Data: cbData(cbPanel, "chats")},
 	})
 	return &tele.ReplyMarkup{InlineKeyboard: rows}
 }
 
-func usersPageKB(chatID int64, page, total, limit int) *tele.ReplyMarkup {
+func usersPageKB(chatID int64, page, total, limit int, lang string) *tele.ReplyMarkup {
 	pages := (total + limit - 1) / limit
 	if pages < 1 {
 		pages = 1
@@ -162,7 +163,7 @@ func usersPageKB(chatID int64, page, total, limit int) *tele.ReplyMarkup {
 	nav := []tele.InlineButton{}
 	if page > 0 {
 		nav = append(nav, tele.InlineButton{
-			Text: "⬅️ Назад",
+			Text: i18n.T(lang, "btn_prev"),
 			Data: cbData(cbUsersPage, strconv.FormatInt(chatID, 10), strconv.Itoa(page-1)),
 		})
 	}
@@ -171,45 +172,48 @@ func usersPageKB(chatID int64, page, total, limit int) *tele.ReplyMarkup {
 	})
 	if page+1 < pages {
 		nav = append(nav, tele.InlineButton{
-			Text: "➡️ Вперёд",
+			Text: i18n.T(lang, "btn_next"),
 			Data: cbData(cbUsersPage, strconv.FormatInt(chatID, 10), strconv.Itoa(page+1)),
 		})
 	}
 	rows := [][]tele.InlineButton{
 		nav,
-		{{Text: "🔙 К чату", Data: cbData(cbPanelChat, strconv.FormatInt(chatID, 10), "select")}},
+		{{Text: i18n.T(lang, "btn_to_chat"), Data: cbData(cbPanelChat, strconv.FormatInt(chatID, 10), "select")}},
 	}
 	return &tele.ReplyMarkup{InlineKeyboard: rows}
 }
 
-func ownerSettingsKB(lockdown, autoConfirm bool) *tele.ReplyMarkup {
-	acText := "❌ Автоподтверждение"
-	if autoConfirm {
-		acText = "✅ Автоподтверждение"
-	}
-	ldText := "🔓 Локдаун выкл"
+func ownerSettingsKB(lockdown, autoConfirm bool, lang string) *tele.ReplyMarkup {
+	acText := i18n.T(lang, "btn_ac")
+	ldText := i18n.T(lang, "btn_ld_off")
 	if lockdown {
-		ldText = "🔒 Локдаун вкл"
+		ldText = i18n.T(lang, "btn_ld_on")
+	}
+	nextLang := "ru"
+	if lang == "ru" {
+		nextLang = "en"
 	}
 	rows := [][]tele.InlineButton{
 		{{Text: acText, Data: cbData(cbOwnerSet, "auto_confirm", boolStr(!autoConfirm))}},
 		{{Text: ldText, Data: cbData(cbOwnerSet, "lockdown", boolStr(!lockdown))}},
-		{{Text: "↩️ Назад", Data: cbData(cbPanel, "back")}},
+		{{Text: i18n.T(lang, "btn_lang", strings.ToUpper(lang)),
+			Data: cbData(cbOwnerSet, "lang", boolStr(nextLang == "en"))}},
+		{{Text: i18n.T(lang, "btn_back"), Data: cbData(cbPanel, "back")}},
 	}
 	return &tele.ReplyMarkup{InlineKeyboard: rows}
 }
 
-func ownerAuditKB() *tele.ReplyMarkup {
+func ownerAuditKB(lang string) *tele.ReplyMarkup {
 	return &tele.ReplyMarkup{InlineKeyboard: [][]tele.InlineButton{
-		{{Text: "🔙 Назад", Data: cbData(cbPanel, "back")}},
+		{{Text: i18n.T(lang, "btn_back"), Data: cbData(cbPanel, "back")}},
 	}}
 }
 
-func deleteAccountKB() *tele.ReplyMarkup {
+func deleteAccountKB(lang string) *tele.ReplyMarkup {
 	return &tele.ReplyMarkup{InlineKeyboard: [][]tele.InlineButton{
 		{
-			{Text: "🗑 Да, удалить всё", Data: cbData(cbDeleteAcc, boolStr(true))},
-			{Text: "↩️ Отмена", Data: cbData(cbDeleteAcc, boolStr(false))},
+			{Text: i18n.T(lang, "btn_yes_delete"), Data: cbData(cbDeleteAcc, boolStr(true))},
+			{Text: i18n.T(lang, "btn_cancel"), Data: cbData(cbDeleteAcc, boolStr(false))},
 		},
 	}}
 }
@@ -219,56 +223,56 @@ func deleteAccountKB() *tele.ReplyMarkup {
 // ------------------------------------------------------------------ //
 
 // DashboardKB — фабрика клавиатуры дашборда (инжектится в dashboard.New).
-func DashboardKB(servers []dashboard.DashServer, chatID int64) *tele.ReplyMarkup {
-	return dashboardKB(servers, chatID)
+func DashboardKB(servers []dashboard.DashServer, chatID int64, lang string) *tele.ReplyMarkup {
+	return dashboardKB(servers, chatID, lang)
 }
 
 // dashboardKB — кнопки дашборда: по строке действий на сервер + обновление/доступ.
 // «✅ Подтвердить» появляется ТОЛЬКО в статусе is_starting (сервер в очереди).
-func dashboardKB(servers []dashboard.DashServer, chatID int64) *tele.ReplyMarkup {
+func dashboardKB(servers []dashboard.DashServer, chatID int64, lang string) *tele.ReplyMarkup {
 	rows := make([][]tele.InlineButton, 0, len(servers)+1)
 	for _, s := range servers {
 		var row []tele.InlineButton
 		if s.IsOnline {
 			row = []tele.InlineButton{{
-				Text: "⏹ Стоп", Data: cbData(cbServer, strconv.FormatInt(s.ID, 10), "stop"),
+				Text: i18n.T(lang, "btn_stop"), Data: cbData(cbServer, strconv.FormatInt(s.ID, 10), "stop"),
 			}}
 		} else if s.Starting {
 			row = []tele.InlineButton{
 				{
-					Text: "✅ Подтвердить", Data: cbData(cbServer, strconv.FormatInt(s.ID, 10), "confirm"),
+					Text: i18n.T(lang, "btn_confirm"), Data: cbData(cbServer, strconv.FormatInt(s.ID, 10), "confirm"),
 				},
 				{
-					Text: "▶️ Старт", Data: cbData(cbServer, strconv.FormatInt(s.ID, 10), "start"),
+					Text: i18n.T(lang, "btn_start"), Data: cbData(cbServer, strconv.FormatInt(s.ID, 10), "start"),
 				},
 			}
 		} else {
 			row = []tele.InlineButton{{
-				Text: "▶️ Старт", Data: cbData(cbServer, strconv.FormatInt(s.ID, 10), "start"),
+				Text: i18n.T(lang, "btn_start"), Data: cbData(cbServer, strconv.FormatInt(s.ID, 10), "start"),
 			}}
 		}
 		rows = append(rows, row)
 	}
 	rows = append(rows, []tele.InlineButton{
-		{Text: "🔄 Обновить", Data: cbRefreshDash},
-		{Text: "🙋 Запросить доступ", Data: cbData(cbReqAccess, strconv.FormatInt(chatID, 10))},
+		{Text: i18n.T(lang, "btn_refresh"), Data: cbRefreshDash},
+		{Text: i18n.T(lang, "btn_request_access"), Data: cbData(cbReqAccess, strconv.FormatInt(chatID, 10))},
 	})
 	return &tele.ReplyMarkup{InlineKeyboard: rows}
 }
 
-func approveAccessKB(userID, chatID int64) *tele.ReplyMarkup {
+func approveAccessKB(userID, chatID int64, lang string) *tele.ReplyMarkup {
 	return &tele.ReplyMarkup{InlineKeyboard: [][]tele.InlineButton{
 		{
-			{Text: "✅ Одобрить", Data: cbData(cbApproveAcc,
+			{Text: i18n.T(lang, "btn_approve"), Data: cbData(cbApproveAcc,
 				strconv.FormatInt(userID, 10), strconv.FormatInt(chatID, 10), boolStr(true))},
-			{Text: "❌ Отклонить", Data: cbData(cbApproveAcc,
+			{Text: i18n.T(lang, "btn_deny"), Data: cbData(cbApproveAcc,
 				strconv.FormatInt(userID, 10), strconv.FormatInt(chatID, 10), boolStr(false))},
 		},
 	}}
 }
 
 // runServerPickerKB — выбор сервера для запуска через /run (несколько серверов).
-func runServerPickerKB(servers []*database.Server, chatID int64) *tele.ReplyMarkup {
+func runServerPickerKB(servers []*database.Server, chatID int64, lang string) *tele.ReplyMarkup {
 	rows := make([][]tele.InlineButton, 0, len(servers)+1)
 	for _, s := range servers {
 		name := s.DisplayName
@@ -276,7 +280,7 @@ func runServerPickerKB(servers []*database.Server, chatID int64) *tele.ReplyMark
 			name = fmt.Sprintf("ID %d", s.ID)
 		}
 		rows = append(rows, []tele.InlineButton{{
-			Text: "▶️ " + btnName(name),
+			Text: i18n.T(lang, "btn_start") + " " + btnName(name),
 			Data: cbData(cbRunSrv, strconv.FormatInt(s.ID, 10), strconv.FormatInt(chatID, 10)),
 		}})
 	}
@@ -290,7 +294,7 @@ func runServerPickerKB(servers []*database.Server, chatID int64) *tele.ReplyMark
 const onbPageSize = 8
 
 // serverPickerKB — чекбоксы выбора серверов с пагинацией (по 8 на страницу).
-func serverPickerKB(servers []aternos.ServerBrief, selected map[string]bool, page int) *tele.ReplyMarkup {
+func serverPickerKB(servers []aternos.ServerBrief, selected map[string]bool, page int, lang string) *tele.ReplyMarkup {
 	total := len(servers)
 	pages := (total + onbPageSize - 1) / onbPageSize
 	if pages < 1 {
@@ -342,7 +346,7 @@ func serverPickerKB(servers []aternos.ServerBrief, selected map[string]bool, pag
 		rows = append(rows, nav)
 	}
 	rows = append(rows, []tele.InlineButton{{
-		Text: fmt.Sprintf("Готово (%d)", len(selected)),
+		Text: i18n.T(lang, "btn_done", len(selected)),
 		Data: cbData(cbOnboarding, "done", ""),
 	}})
 	return &tele.ReplyMarkup{InlineKeyboard: rows}

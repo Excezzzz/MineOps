@@ -24,6 +24,10 @@ website.
 - **👤 Multi-user** — Anyone can self-onboard via `/start`, add their own Aternos servers, and manage them independently
 - **🔒 Fernet encryption** — Aternos session cookies are encrypted at rest (compatible with Python cryptography library)
 - **📡 Smart polling** — Dashboard uses mcsrvstat.us API + Minecraft SLP protocol; Aternos panel is only contacted for actions (start/stop/confirm) to avoid bans
+- **🌐 Multi-language** — English and Russian UI, auto-detected from Telegram language
+- **📅 Scheduled start** — `/schedule 18:00` to auto-start servers daily or once
+- **📊 Statistics** — `/stats` shows launch counts and recent activity
+- **🔔 Player notifications** — join/leave alerts in group chats (auto-deleted)
 
 ## 🏗 Architecture
 
@@ -119,6 +123,13 @@ go run ./cmd/bot
 | `/run` | DM/Group | Start server(s) |
 | `/confirm` | DM/Group | Manually confirm Aternos queue |
 | `/status` | DM/Group | Show server status |
+| `/ping` | DM/Group | Check bot latency |
+| `/players` | DM/Group | List online players |
+| `/info` | DM/Group | Server info card |
+| `/grant` | Group | Grant server access to user |
+| `/revoke` | Group | Revoke server access from user |
+| `/stats` | DM | Launch statistics from audit log |
+| `/schedule` | DM | Schedule automatic server start |
 | `/link` | Group | Link group chat to your account |
 | `/unlink` | Group | Unlink group chat |
 | `/emergency` | DM | Toggle lockdown — revoke all access |
@@ -126,7 +137,7 @@ go run ./cmd/bot
 
 ## 🗄 Database schema
 
-SQLite with auto-migrations (v1 → v4):
+SQLite with auto-migrations (v1 → v5):
 
 - `owners` — registered users (encrypted Aternos cookies)
 - `servers` — Aternos servers per owner

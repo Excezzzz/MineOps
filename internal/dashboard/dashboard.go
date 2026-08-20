@@ -21,6 +21,7 @@ import (
 
 	"mineops/internal/aternos"
 	"mineops/internal/database"
+	"mineops/internal/i18n"
 	"mineops/internal/mcsrvstat"
 	"mineops/internal/util"
 )
@@ -41,7 +42,7 @@ type DashServer struct {
 
 // KBFactory создаёт клавиатуру дашборда для чата (инжектится из telegram,
 // чтобы избежать циклического импорта).
-type KBFactory func(servers []DashServer, chatID int64) *tele.ReplyMarkup
+type KBFactory func(servers []DashServer, chatID int64, lang string) *tele.ReplyMarkup
 
 // Dashboard — состояние дашбордов и кешей статусов.
 type Dashboard struct {
@@ -58,6 +59,7 @@ type Dashboard struct {
 	pinPending     map[int64]bool
 	sessionBroken  map[int64]bool
 	lastOnline     map[int64]bool
+	lastPlayers    map[int64]map[string]bool
 }
 
 type panelEntry struct {
@@ -84,7 +86,24 @@ func New(db *database.DB, managers *aternos.Registry, kb KBFactory) *Dashboard {
 		pinPending:     make(map[int64]bool),
 		sessionBroken:  make(map[int64]bool),
 		lastOnline:     make(map[int64]bool),
+		lastPlayers:    make(map[int64]map[string]bool),
 	}
+}
+
+// chatLang возвращает язык интерфейса для чата (язык владельца чата).
+func (d *Dashboard) chatLang(chatID int64) string {
+	if o, _ := d.db.GetChatOwner(chatID); o != nil && o.Lang != "" {
+		return o.Lang
+	}
+	return "ru"
+}
+
+// ownerLang возвращает язык владельца по user_id.
+func (d *Dashboard) ownerLang(ownerID int64) string {
+	if o, _ := d.db.GetOwner(ownerID); o != nil && o.Lang != "" {
+		return o.Lang
+	}
+	return "ru"
 }
 
 // ------------------------------------------------------------------ //
@@ -137,16 +156,16 @@ func (d *Dashboard) queuePosition(serverID int64) int {
 // ------------------------------------------------------------------ //
 
 // FormatDashboardText формирует единый дашборд (HTML).
-func (d *Dashboard) FormatDashboardText(servers []DashServer) string {
+func (d *Dashboard) FormatDashboardText(servers []DashServer, lang string) string {
 	if len(servers) == 0 {
-		return "🔴 <b>В чате нет подключённых серверов.</b>\nВладелец: /link\n\n" + nowLabel()
+		return i18n.T(lang, "dash_no_servers", nowLabel(lang))
 	}
 
 	blocks := make([]string, 0, len(servers))
 	for _, s := range servers {
 		ip := s.ServerIP
 		if ip == "" {
-			ip = "Не указан"
+			ip = i18n.T(lang, "not_set")
 		}
 		name := s.DisplayName
 		if name == "" {
@@ -157,18 +176,16 @@ func (d *Dashboard) FormatDashboardText(servers []DashServer) string {
 		if s.IsOnline {
 			d.ClearStarting()
 			d.ClearQueuePosition(s.ID)
-			statusLine = fmt.Sprintf("🟢 <b>%s — ОНЛАЙН</b>", html.EscapeString(name))
+			statusLine = i18n.T(lang, "dash_status_online", html.EscapeString(name))
 		} else if pos := d.queuePosition(s.ID); pos > 0 {
-			statusLine = fmt.Sprintf("🟡 <b>%s — В ОЧЕРЕДИ (позиция %d)</b> ⏳\n<i>(Ожидание запуска на Aternos...)</i>",
-				html.EscapeString(name), pos)
+			statusLine = i18n.T(lang, "dash_status_queue", html.EscapeString(name), pos)
 		} else if d.IsStarting() {
-			statusLine = fmt.Sprintf("🟡 <b>%s — ЗАПУСКАЕТСЯ / В ОЧЕРЕДИ...</b> ⏳\n<i>(Открытие портов Aternos занимает ~2-5 мин)</i>",
-				html.EscapeString(name))
+			statusLine = i18n.T(lang, "dash_status_starting", html.EscapeString(name))
 		} else {
-			statusLine = fmt.Sprintf("🔴 <b>%s — ОФФЛАЙН</b>", html.EscapeString(name))
+			statusLine = i18n.T(lang, "dash_status_offline", html.EscapeString(name))
 		}
 
-		lines := []string{statusLine, "🌐 IP: " + html.EscapeString(ip)}
+		lines := []string{statusLine, i18n.T(lang, "dash_ip", html.EscapeString(ip))}
 		if s.IsOnline {
 			if len(s.PlayerList) > 0 {
 				names := make([]string, 0, len(s.PlayerList))
@@ -178,24 +195,24 @@ func (d *Dashboard) FormatDashboardText(servers []DashServer) string {
 				if len(names) > playersLimit {
 					names = names[:playersLimit]
 				}
-				lines = append(lines, fmt.Sprintf("👥 Игроки (%d/%d):\n%s",
+				lines = append(lines, i18n.T(lang, "dash_players_list",
 					s.PlayersOnline, s.PlayersMax, strings.Join(names, "\n")))
 			} else {
-				lines = append(lines, fmt.Sprintf("👥 Игроки: %d/%d", s.PlayersOnline, s.PlayersMax))
+				lines = append(lines, i18n.T(lang, "dash_players_num", s.PlayersOnline, s.PlayersMax))
 			}
 		}
 		version := s.Version
 		if version == "" {
-			version = "Неизвестно"
+			version = i18n.T(lang, "unknown")
 		}
-		lines = append(lines, "📦 Версия: "+html.EscapeString(version))
+		lines = append(lines, i18n.T(lang, "dash_version", html.EscapeString(version)))
 		blocks = append(blocks, strings.Join(lines, "\n"))
 	}
-	return strings.Join(blocks, "\n\n") + "\n\n" + nowLabel()
+	return strings.Join(blocks, "\n\n") + "\n\n" + nowLabel(lang)
 }
 
 // nowLabel — «🕐 Обновлено: HH:MM:SS TZ» (UTC или TZ из ENV).
-func nowLabel() string {
+func nowLabel(lang string) string {
 	tz := os.Getenv("TZ")
 	loc := time.UTC
 	label := "UTC"
@@ -205,7 +222,7 @@ func nowLabel() string {
 			label = tz
 		}
 	}
-	return "🕐 Обновлено: " + time.Now().In(loc).Format("15:04:05") + " " + label
+	return i18n.T(lang, "dash_timestamp", time.Now().In(loc).Format("15:04:05"), label)
 }
 
 // ------------------------------------------------------------------ //
@@ -274,9 +291,6 @@ func panelToStatus(server *database.Server, panel *aternos.ServerInfo) DashServe
 		slots = util.ToInt(panel.Slots)
 	}
 	version := panel.Version
-	if version == "" {
-		version = "Неизвестно"
-	}
 	return DashServer{
 		ID:            server.ID,
 		DisplayName:   server.DisplayName,
@@ -386,12 +400,9 @@ func (d *Dashboard) renderDashboard(ctx context.Context, b *tele.Bot, chatID int
 		d.pinPending[chatID] = true
 		if !d.pinNoticeSent[chatID] {
 			d.pinNoticeSent[chatID] = true
+			lang := d.chatLang(chatID)
 			go func() {
-				_, err := b.Send(&tele.Chat{ID: chatID},
-					"⚠️ <b>Дайте боту права администратора в этой группе</b>, "+
-						"чтобы он мог закреплять дашборд.\n"+
-						"Настройки группы → Управление группами → администраторы → "+
-						"добавить бота.")
+				_, err := b.Send(&tele.Chat{ID: chatID}, i18n.T(lang, "pin_help"))
 				if err != nil {
 					log.Printf("dashboard: chat %d: подсказка о закрепе не отправлена: %v", chatID, err)
 				}
@@ -439,18 +450,23 @@ func (d *Dashboard) updateChatDashboard(ctx context.Context, b *tele.Bot, chatID
 		merged = append(merged, st)
 	}
 
-	text := d.FormatDashboardText(merged)
+	lang := d.chatLang(chatID)
+	text := d.FormatDashboardText(merged, lang)
 	if d.kb != nil {
-		d.renderDashboard(ctx, b, chatID, text, d.kb(merged, chatID))
+		d.renderDashboard(ctx, b, chatID, text, d.kb(merged, chatID, lang))
 		return
 	}
 	d.renderDashboard(ctx, b, chatID, text, nil)
 }
 
 func (d *Dashboard) updateOwnerPMDashboard(ctx context.Context, b *tele.Bot, owner *database.Owner, merged []DashServer) {
-	text := d.FormatDashboardText(merged)
+	lang := owner.Lang
+	if lang == "" {
+		lang = "ru"
+	}
+	text := d.FormatDashboardText(merged, lang)
 	if len(merged) == 0 {
-		text = "🔴 <b>Нет подключённых серверов.</b>\nОткройте /panel и нажмите «🔄 Обновить серверы»."
+		text = i18n.T(lang, "dash_pm_no_servers")
 	}
 
 	pmPinned, err := d.db.GetOwnerPmPinned(owner.UserID)
@@ -511,6 +527,11 @@ func (d *Dashboard) UpdateDashboards(ctx context.Context, b *tele.Bot) {
 			wasOnline := d.lastOnline[s.ID]
 			if wasOnline != status.IsOnline {
 				d.lastOnline[s.ID] = status.IsOnline
+				if !status.IsOnline {
+					// Сервер ушёл оффлайн: сбрасываем список игроков, чтобы
+					// не слать «вышел» по всем, когда сервер вернётся онлайн.
+					delete(d.lastPlayers, s.ID)
+				}
 				d.mu.Unlock()
 				if wasOnline {
 					log.Printf("dashboard: сервер %d (%s) ушёл в оффлайн", s.ID, s.ServerIP)
@@ -520,6 +541,11 @@ func (d *Dashboard) UpdateDashboards(ctx context.Context, b *tele.Bot) {
 				}
 			} else {
 				d.mu.Unlock()
+			}
+
+			// Уведомления о входе/выходе игроков (по списку из mcsrvstat).
+			if status.IsOnline && status.PlayersOnline > 0 {
+				d.notifyPlayers(b, s, status.PlayerList)
 			}
 		}
 		chats, err := d.db.GetChatsByOwner(owner.UserID)
@@ -544,12 +570,12 @@ func (d *Dashboard) notifyServerOffline(b *tele.Bot, s *database.Server) {
 	if name == "" {
 		name = fmt.Sprintf("ID %d", s.ID)
 	}
-	text := fmt.Sprintf("🔴 <b>%s</b> ушёл в оффлайн.", html.EscapeString(name))
 	chats, err := d.db.GetChatsForServer(s.ID)
 	if err != nil {
 		return
 	}
 	for _, ch := range chats {
+		text := i18n.T(d.chatLang(ch.ChatID), "srv_offline_notify", html.EscapeString(name))
 		msg, err := b.Send(&tele.Chat{ID: ch.ChatID}, text)
 		if err != nil {
 			log.Printf("dashboard: уведомление об оффлайне сервера %d в чат %d не отправлено: %v",
@@ -561,6 +587,97 @@ func (d *Dashboard) notifyServerOffline(b *tele.Bot, s *database.Server) {
 			_ = b.Delete(m)
 		}(msg)
 	}
+}
+
+// notifyPlayers шлёт в чаты сервера уведомления о входе/выходе игроков
+// (дельта против lastPlayers). До 3 игроков — по одному сообщению на игрока
+// («🟢 X зашёл на сервер»), больше — одно объединённое сообщение списком.
+// Каждое уведомление временное: удаляется через 45 секунд.
+func (d *Dashboard) notifyPlayers(b *tele.Bot, s *database.Server, current []string) {
+	d.mu.Lock()
+	prev := d.lastPlayers[s.ID]
+	if prev == nil {
+		prev = map[string]bool{}
+	}
+	cur := map[string]bool{}
+	for _, n := range current {
+		cur[n] = true
+	}
+
+	var joined, left []string
+	for _, n := range current {
+		if !prev[n] {
+			joined = append(joined, n)
+		}
+	}
+	for n := range prev {
+		if !cur[n] {
+			left = append(left, n)
+		}
+	}
+	if len(joined) == 0 && len(left) == 0 {
+		d.mu.Unlock()
+		return
+	}
+	d.lastPlayers[s.ID] = cur
+	d.mu.Unlock()
+
+	name := s.DisplayName
+	if name == "" {
+		name = s.ServerIP
+	}
+	if name == "" {
+		name = fmt.Sprintf("ID %d", s.ID)
+	}
+	escapedName := html.EscapeString(name)
+
+	chats, err := d.db.GetChatsForServer(s.ID)
+	if err != nil {
+		return
+	}
+	for _, ch := range chats {
+		lang := d.chatLang(ch.ChatID)
+		var texts []string
+		if len(joined) > 0 {
+			if len(joined) <= 3 {
+				for _, n := range joined {
+					texts = append(texts, i18n.T(lang, "qw_join", html.EscapeString(n), escapedName))
+				}
+			} else {
+				texts = append(texts, i18n.T(lang, "players_join_many", joinNames(joined), escapedName))
+			}
+		}
+		if len(left) > 0 {
+			if len(left) <= 3 {
+				for _, n := range left {
+					texts = append(texts, i18n.T(lang, "qw_leave", html.EscapeString(n), escapedName))
+				}
+			} else {
+				texts = append(texts, i18n.T(lang, "players_leave_many", joinNames(left), escapedName))
+			}
+		}
+		for _, text := range texts {
+			msg, err := b.Send(&tele.Chat{ID: ch.ChatID}, text)
+			if err != nil {
+				log.Printf("dashboard: уведомление об игроках сервера %d в чат %d не отправлено: %v",
+					s.ID, ch.ChatID, err)
+				continue
+			}
+			go func(m *tele.Message) {
+				time.Sleep(45 * time.Second)
+				_ = b.Delete(m)
+			}(msg)
+		}
+	}
+}
+
+// joinNames экранирует и склеивает имена игроков через запятую.
+func joinNames(names []string) string {
+	escaped := make([]string, 0, len(names))
+	for _, n := range names {
+		escaped = append(escaped, html.EscapeString(n))
+	}
+	return strings.Join(escaped, ", ")
 }
 
 // UpdateChatsDashboards обновляет дашборды в конкретных чатах.
@@ -597,9 +714,11 @@ func (d *Dashboard) CheckAllSessions(ctx context.Context, b *tele.Bot) {
 			d.sessionBroken[uid] = true
 			d.mu.Unlock()
 			_ = d.db.LogAction(uid, "session_expired", "кука Aternos просрочена", 0, 0, 0)
-			_, err := b.Send(&tele.Chat{ID: uid},
-				"⚠️ <b>Кука Aternos просрочена или недействительна!</b>\n\n"+
-					"Обновите её: /set_session или кнопка «🔄 Обновить куку» в панели /panel.")
+			lang := owner.Lang
+			if lang == "" {
+				lang = "ru"
+			}
+			_, err := b.Send(&tele.Chat{ID: uid}, i18n.T(lang, "cookie_expired_pm"))
 			if err != nil {
 				log.Printf("dashboard: owner %d: уведомление о куке не отправлено: %v", uid, err)
 			}

@@ -11,6 +11,7 @@ import (
 
 	"mineops/internal/aternos"
 	"mineops/internal/crypto"
+	"mineops/internal/i18n"
 )
 
 // startOnboarding — начало онбординга (вызывается из /start).
@@ -19,19 +20,11 @@ func (bot *Bot) startOnboarding(c tele.Context) {
 	if m == nil || m.Sender == nil {
 		return
 	}
+	lang := i18n.Detect(m.Sender.LanguageCode)
 	bot.fsm.Set(m.Sender.ID, fsmOnbWaitingCookie)
 	bot.fsm.SetData(m.Sender.ID, "username", m.Sender.Username)
 	bot.fsm.SetData(m.Sender.ID, "full_name", m.Sender.FirstName+" "+m.Sender.LastName)
-	_, _ = bot.b.Send(m.Chat,
-		"👋 <b>Привет! Я MineOps — бот для управления серверами Aternos.</b>\n\n"+
-			"Отправьте куку <code>ATERNOS_SESSION</code> — я проверю её, и вы сможете "+
-			"управлять своими серверами прямо в Telegram.\n\n"+
-			"💡 <b>Как получить куку:</b> зайдите на aternos.org → откройте консоль "+
-			"браузера (F12) → вкладка Network → обновите страницу → найдите запрос "+
-			"на ваш аккаунт → закладка Cookies → скопируйте значение "+
-			"<code>ATERNOS_SESSION</code>.\n\n"+
-			"<i>🔒 Кука шифруется (Fernet) и хранится только в вашем профиле бота. "+
-			"Сообщение с кукой сразу удаляется.</i>")
+	_, _ = bot.b.Send(m.Chat, i18n.T(lang, "onb_welcome"))
 }
 
 // onSessionCookie — принимает куку в состоянии waiting_cookie.
@@ -47,7 +40,8 @@ func (bot *Bot) onSessionCookie(c tele.Context) {
 	// Мгновенно удаляем сообщение с кукой.
 	_ = bot.b.Delete(m)
 
-	statusMsg, err := bot.b.Send(m.Chat, "⏳ Проверяю сессию Aternos и ищу серверы...")
+	lang := i18n.Detect(m.Sender.LanguageCode)
+	statusMsg, err := bot.b.Send(m.Chat, i18n.T(lang, "onb_checking"))
 	if err != nil {
 		return
 	}
@@ -55,12 +49,11 @@ func (bot *Bot) onSessionCookie(c tele.Context) {
 	defer cancel()
 	servers, err := bot.managers.For(m.Sender.ID).ProbeSession(ctx, cookie)
 	if err != nil {
-		_, _ = bot.b.Edit(statusMsg, "❌ "+err.Error())
+		_, _ = bot.b.Edit(statusMsg, i18n.T(lang, "err_prefix", err.Error()))
 		return
 	}
 	if len(servers) == 0 {
-		_, _ = bot.b.Edit(statusMsg,
-			"На аккаунте Aternos не найдено серверов. Проверьте аккаунт и попробуйте снова.")
+		_, _ = bot.b.Edit(statusMsg, i18n.T(lang, "onb_no_servers"))
 		return
 	}
 	bot.fsm.Set(m.Sender.ID, fsmOnbSelecting)
@@ -69,8 +62,8 @@ func (bot *Bot) onSessionCookie(c tele.Context) {
 	bot.fsm.SetData(m.Sender.ID, "selected", map[string]bool{})
 	bot.fsm.SetData(m.Sender.ID, "page", 0)
 	_, _ = bot.b.Edit(statusMsg,
-		"✅ Сессия действительна! Выберите серверы для управления:",
-		serverPickerKB(servers, map[string]bool{}, 0))
+		i18n.T(lang, "onb_valid"),
+		serverPickerKB(servers, map[string]bool{}, 0, lang))
 }
 
 // cbOnboarding — чекбоксы выбора серверов, пагинация и кнопка «Готово».
@@ -82,6 +75,7 @@ func (bot *Bot) cbOnboarding(c tele.Context, parts []string) error {
 	bot.answer(c, "", false)
 	action := cbStr(parts, 1)
 	uid := cb.Sender.ID
+	lang := i18n.Detect(cb.Sender.LanguageCode)
 
 	pageAny, _ := bot.fsm.GetData(uid, "page")
 	page, _ := pageAny.(int)
@@ -108,8 +102,8 @@ func (bot *Bot) cbOnboarding(c tele.Context, parts []string) error {
 			selected[sid] = true
 		}
 		bot.fsm.SetData(uid, "selected", selected)
-		_ = bot.edit(cb.Message, "✅ Сессия действительна! Выберите серверы:",
-			serverPickerKB(servers, selected, page))
+		_ = bot.edit(cb.Message, i18n.T(lang, "onb_valid"),
+			serverPickerKB(servers, selected, page, lang))
 		return nil
 	}
 
@@ -132,8 +126,8 @@ func (bot *Bot) cbOnboarding(c tele.Context, parts []string) error {
 			return c.Respond(&tele.CallbackResponse{})
 		}
 		bot.fsm.SetData(uid, "page", newPage)
-		_ = bot.edit(cb.Message, "✅ Сессия действительна! Выберите серверы:",
-			serverPickerKB(servers, selected, newPage))
+		_ = bot.edit(cb.Message, i18n.T(lang, "onb_valid"),
+			serverPickerKB(servers, selected, newPage, lang))
 		return nil
 	}
 
@@ -141,30 +135,31 @@ func (bot *Bot) cbOnboarding(c tele.Context, parts []string) error {
 		selAny, _ := bot.fsm.GetData(uid, "selected")
 		selected, ok := selAny.(map[string]bool)
 		if !ok {
-			bot.answer(c, "Сессия устарела — начните заново /start.", false)
+			bot.answer(c, i18n.T(lang, "onb_session_expired"), false)
 			return nil
 		}
 		if len(selected) == 0 {
-			bot.answer(c, "Выберите хотя бы один сервер.", false)
+			bot.answer(c, i18n.T(lang, "onb_select_any"), false)
 			return nil
 		}
 		cookieAny, ok := bot.fsm.GetData(uid, "cookie")
 		if !ok {
-			bot.answer(c, "Сессия устарела — начните заново /start.", false)
+			bot.answer(c, i18n.T(lang, "onb_session_expired"), false)
 			return nil
 		}
 		cookie := cookieAny.(string)
 		serversAny, _ := bot.fsm.GetData(uid, "servers")
 		servers := serversAny.([]aternos.ServerBrief)
 
-		_ = bot.edit(cb.Message, "💾 Сохраняю аккаунт...", nil)
+		_ = bot.edit(cb.Message, i18n.T(lang, "onb_saving"), nil)
 		if err := bot.db.CreateOwner(uid,
 			cb.Sender.Username, cb.Sender.FirstName+" "+cb.Sender.LastName,
 			crypto.EncryptSession(cookie)); err != nil {
 			log.Printf("onboarding: создание владельца %d не удалось: %v", uid, err)
-			bot.answer(c, "❌ Не удалось создать аккаунт. Попробуйте /start заново.", true)
+			bot.answer(c, i18n.T(lang, "onb_create_fail"), true)
 			return nil
 		}
+		_ = bot.db.SetOwnerLang(uid, lang)
 		added := []string{}
 		for _, s := range servers {
 			if selected[s.AternosID] {
@@ -174,21 +169,14 @@ func (bot *Bot) cbOnboarding(c tele.Context, parts []string) error {
 				}
 			}
 		}
-		_ = bot.db.LogAction(uid, "onboarding", "серверы: "+strings.Join(added, ", "), 0, 0, 0)
+		_ = bot.db.LogAction(uid, "onboarding", "servers: "+strings.Join(added, ", "), 0, 0, 0)
 		bot.fsm.Clear(uid)
 
-		addedText := "нет"
+		addedText := i18n.T(lang, "none_short")
 		if len(added) > 0 {
 			addedText = strings.Join(added, ", ")
 		}
-		_ = bot.edit(cb.Message,
-			"🎉 <b>Готово!</b> Ваш аккаунт создан.\n\n"+
-				"1️⃣ Добавьте бота в свою группу и выдайте ему права администратора;\n"+
-				"2️⃣ В группе напишите <b>/link</b>;\n"+
-				"3️⃣ В ЛС: /panel → 💬 Чаты → подключите нужные серверы для группы;\n"+
-				"4️⃣ Дашборд со статусами закрепится в чате автоматически.\n\n"+
-				"Подключено серверов: <b>"+addedText+"</b>\n\n"+
-				"Команды: /panel — панель владельца, /set_session — обновить куку.", nil)
+		_ = bot.edit(cb.Message, i18n.T(lang, "onb_done", addedText), nil)
 	}
 	return nil
 }

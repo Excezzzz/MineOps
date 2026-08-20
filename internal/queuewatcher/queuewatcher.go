@@ -20,6 +20,7 @@ import (
 	"mineops/internal/aternos"
 	"mineops/internal/dashboard"
 	"mineops/internal/database"
+	"mineops/internal/i18n"
 	"mineops/internal/util"
 )
 
@@ -305,6 +306,22 @@ func (w *Watcher) refreshDashboard(b *tele.Bot, serverID int64) {
 	}
 }
 
+// ownerLang возвращает язык владельца по user_id.
+func (w *Watcher) ownerLang(ownerID int64) string {
+	if o, _ := w.db.GetOwner(ownerID); o != nil && o.Lang != "" {
+		return o.Lang
+	}
+	return "ru"
+}
+
+// chatLang возвращает язык интерфейса чата (язык владельца чата).
+func (w *Watcher) chatLang(chatID int64) string {
+	if o, _ := w.db.GetChatOwner(chatID); o != nil && o.Lang != "" {
+		return o.Lang
+	}
+	return "ru"
+}
+
 // notifyServerOnline шлёт во все привязанные чаты сервера временное
 // уведомление «сервер запущен» (удаляется через 60 секунд).
 func (w *Watcher) notifyServerOnline(b *tele.Bot, serverID int64, status *aternos.ServerInfo) {
@@ -321,15 +338,15 @@ func (w *Watcher) notifyServerOnline(b *tele.Bot, serverID int64, status *aterno
 		ip = util.ToStr(status.IP)
 	}
 	if ip == "" {
-		ip = "Не указан"
+		ip = i18n.T("ru", "not_set")
 	}
-	text := fmt.Sprintf("🟢 <b>%s</b> запущен и готов к игре!\n🌐 IP: <code>%s</code>",
-		html.EscapeString(name), html.EscapeString(ip))
 	chats, err := w.db.GetChatsForServer(serverID)
 	if err != nil {
 		return
 	}
 	for _, ch := range chats {
+		lang := w.chatLang(ch.ChatID)
+		text := i18n.T(lang, "qw_online", html.EscapeString(name), html.EscapeString(ip))
 		msg, err := b.Send(&tele.Chat{ID: ch.ChatID}, text)
 		if err != nil {
 			log.Printf("queuewatcher: уведомление об онлайне сервера %d в чат %d не отправлено: %v",
@@ -349,9 +366,9 @@ func (w *Watcher) notifyOwner(b *tele.Bot, ownerID, serverID int64, reason strin
 	if err == nil && server != nil {
 		name = server.DisplayName
 	}
+	lang := w.ownerLang(ownerID)
 	_, err = b.Send(&tele.Chat{ID: ownerID},
-		fmt.Sprintf("⚠️ <b>Автоподтверждение запуска не сработало:</b>\n🖥 %s\n%s\nПроверьте Aternos вручную.",
-			html.EscapeString(name), reason))
+		i18n.T(lang, "qw_failed", html.EscapeString(name), reason))
 	if err != nil {
 		log.Printf("queuewatcher: не удалось уведомить владельца %d о сервере %d: %v", ownerID, serverID, err)
 	}

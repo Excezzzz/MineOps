@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"html"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"mineops/internal/crypto"
 	"mineops/internal/database"
+	"mineops/internal/i18n"
 )
 
 // Manager — фасад работы с Aternos для одного владельца.
@@ -55,11 +57,46 @@ func (m *Manager) lockFor(ownerID int64) *sync.Mutex {
 	return mu
 }
 
+// lang возвращает язык интерфейса владельца (для локализации ошибок/текстов).
+func (m *Manager) lang() string {
+	if o, _ := m.db.GetOwner(m.ownerID); o != nil && o.Lang != "" {
+		return o.Lang
+	}
+	return "ru"
+}
+
+// localize переводит текст ошибки Aternos на язык владельца. Сопоставление —
+// по известным константам сообщений (равенство или вхождение в обёрнутый
+// текст). Неизвестные ошибки возвращаются как есть.
+func (m *Manager) localize(err error) error {
+	if err == nil {
+		return nil
+	}
+	lang := m.lang()
+	var aerr *Error
+	if !asError(err, &aerr) {
+		return err
+	}
+	msg := aerr.Message
+	for _, pair := range [][2]string{
+		{msgCloudflare, "err_cloudflare"},
+		{msgSessionExpired, "err_session_expired"},
+		{msgOwnerNotFound, "err_owner_not_found"},
+		{msgSessionNotSet, "err_session_not_set"},
+		{msgServerNotFound, "err_server_not_found"},
+	} {
+		if msg == pair[0] || strings.Contains(msg, pair[0]) {
+			return NewError(i18n.T(lang, pair[1]))
+		}
+	}
+	return err
+}
+
 // cookie возвращает расшифрованную куку владельца.
 func (m *Manager) cookie() (string, error) {
 	owner, err := m.db.GetOwner(m.ownerID)
 	if err != nil {
-		return "", NewError(fmt.Sprintf("Не удалось прочитать профиль: %v", err))
+		return "", NewError(i18n.T(m.lang(), "err_profile_read", err.Error()))
 	}
 	if owner == nil {
 		return "", NewError(msgOwnerNotFound)
@@ -123,9 +160,10 @@ func (m *Manager) run(ctx context.Context, fn func(ctx context.Context) error) e
 	if err := fn(ctxWithCookie(ctx, cookie)); err != nil {
 		var aerr *Error
 		if asError(err, &aerr) {
-			return err
+			return m.localize(err)
 		}
-		return NewError(fmt.Sprintf("Не удалось выполнить запрос к Aternos: %v", err))
+		return m.localize(NewError(fmt.Sprintf("%s: %v",
+			i18n.T(m.lang(), "err_request_failed"), err)))
 	}
 	return nil
 }
@@ -187,7 +225,7 @@ func (m *Manager) StartServer(ctx context.Context, serverID int64) (string, erro
 		return "", err
 	}
 	_ = m.db.LogAction(m.ownerID, "server_start", server.DisplayName, 0, 0, serverID)
-	return fmt.Sprintf("Запуск сервера %s запрошен.", html.EscapeString(server.DisplayName)), nil
+	return i18n.T(m.lang(), "srv_start_requested", html.EscapeString(server.DisplayName)), nil
 }
 
 // StopServer останавливает сервер владельца.

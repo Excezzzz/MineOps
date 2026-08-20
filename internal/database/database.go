@@ -15,7 +15,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const SchemaVersion = 4
+const SchemaVersion = 5
 
 // Owner — владелец (свой Aternos-аккаунт).
 type Owner struct {
@@ -29,6 +29,9 @@ type Owner struct {
 	CreatedAt      string
 	UpdatedAt      string
 	PMPinnedMsgID  sql.NullInt64
+	ScheduleTime   string
+	ScheduleOnce   bool
+	Lang           string
 }
 
 // Server — сервер Aternos владельца.
@@ -246,6 +249,32 @@ func (d *DB) migrate() error {
 		version = 4
 	}
 
+	if version < 5 {
+		cols, err := d.tableColumns("owners")
+		if err != nil {
+			return err
+		}
+		if !cols["schedule_time"] {
+			if _, err := d.db.Exec("ALTER TABLE owners ADD COLUMN schedule_time TEXT NOT NULL DEFAULT ''"); err != nil {
+				return err
+			}
+		}
+		if !cols["schedule_once"] {
+			if _, err := d.db.Exec("ALTER TABLE owners ADD COLUMN schedule_once INTEGER NOT NULL DEFAULT 0"); err != nil {
+				return err
+			}
+		}
+		if !cols["lang"] {
+			if _, err := d.db.Exec("ALTER TABLE owners ADD COLUMN lang TEXT NOT NULL DEFAULT 'ru'"); err != nil {
+				return err
+			}
+		}
+		if err := d.setVersion(5); err != nil {
+			return err
+		}
+		version = 5
+	}
+
 	if version < SchemaVersion {
 		return fmt.Errorf("неизвестная версия схемы БД: %d", version)
 	}
@@ -363,7 +392,7 @@ func scanOwner(row *sql.Row) (*Owner, error) {
 	var o Owner
 	err := row.Scan(&o.UserID, &o.Username, &o.FullName, &o.AternosSession,
 		&o.SessionValid, &o.MaxServers, &o.LockdownMode, &o.CreatedAt, &o.UpdatedAt,
-		&o.PMPinnedMsgID)
+		&o.PMPinnedMsgID, &o.ScheduleTime, &o.ScheduleOnce, &o.Lang)
 	if err != nil {
 		return nil, err
 	}
@@ -377,7 +406,7 @@ func scanOwners(rows *sql.Rows) ([]*Owner, error) {
 		var o Owner
 		if err := rows.Scan(&o.UserID, &o.Username, &o.FullName, &o.AternosSession,
 			&o.SessionValid, &o.MaxServers, &o.LockdownMode, &o.CreatedAt, &o.UpdatedAt,
-			&o.PMPinnedMsgID); err != nil {
+			&o.PMPinnedMsgID, &o.ScheduleTime, &o.ScheduleOnce, &o.Lang); err != nil {
 			return nil, err
 		}
 		out = append(out, &o)
@@ -389,7 +418,8 @@ func scanOwners(rows *sql.Rows) ([]*Owner, error) {
 func (d *DB) GetOwner(userID int64) (*Owner, error) {
 	row := d.db.QueryRow(
 		"SELECT user_id, username, full_name, aternos_session, session_valid,"+
-			" max_servers, lockdown_mode, created_at, updated_at, pm_pinned_msg_id"+
+			" max_servers, lockdown_mode, created_at, updated_at, pm_pinned_msg_id,"+
+			" schedule_time, schedule_once, lang"+
 			" FROM owners WHERE user_id = ?", userID)
 	o, err := scanOwner(row)
 	if err == sql.ErrNoRows {
@@ -402,7 +432,8 @@ func (d *DB) GetOwner(userID int64) (*Owner, error) {
 func (d *DB) GetAllOwners() ([]*Owner, error) {
 	rows, err := d.db.Query(
 		"SELECT user_id, username, full_name, aternos_session, session_valid," +
-			" max_servers, lockdown_mode, created_at, updated_at, pm_pinned_msg_id" +
+			" max_servers, lockdown_mode, created_at, updated_at, pm_pinned_msg_id," +
+			" schedule_time, schedule_once, lang" +
 			" FROM owners ORDER BY created_at")
 	if err != nil {
 		return nil, err
@@ -418,6 +449,33 @@ func (d *DB) IsOwner(userID int64) (bool, error) {
 		return false, nil
 	}
 	return err == nil, err
+}
+
+// SetOwnerLang сохраняет язык интерфейса владельца.
+func (d *DB) SetOwnerLang(userID int64, lang string) error {
+	_, err := d.db.Exec("UPDATE owners SET lang = ? WHERE user_id = ?", lang, userID)
+	return err
+}
+
+// SetOwnerSchedule сохраняет расписание автозапуска владельца
+// (time "18:00", once=1 — однократный запуск; пустой time отключает).
+func (d *DB) SetOwnerSchedule(userID int64, scheduleTime string, once bool) error {
+	_, err := d.db.Exec("UPDATE owners SET schedule_time = ?, schedule_once = ?, updated_at = ? WHERE user_id = ?",
+		scheduleTime, boolInt(once), nowISO(), userID)
+	return err
+}
+
+// GetScheduledOwners возвращает владельцев с активным расписанием.
+func (d *DB) GetScheduledOwners() ([]*Owner, error) {
+	rows, err := d.db.Query(
+		"SELECT user_id, username, full_name, aternos_session, session_valid,"+
+			" max_servers, lockdown_mode, created_at, updated_at, pm_pinned_msg_id,"+
+			" schedule_time, schedule_once, lang"+
+			" FROM owners WHERE schedule_time != '' AND session_valid = 1")
+	if err != nil {
+		return nil, err
+	}
+	return scanOwners(rows)
 }
 
 // IsChatOwner — является ли пользователь владельцем данного чата.
@@ -704,7 +762,8 @@ func (d *DB) GetChat(chatID int64) (*Chat, error) {
 func (d *DB) GetChatOwner(chatID int64) (*Owner, error) {
 	row := d.db.QueryRow(
 		"SELECT o.user_id, o.username, o.full_name, o.aternos_session, o.session_valid,"+
-			" o.max_servers, o.lockdown_mode, o.created_at, o.updated_at, o.pm_pinned_msg_id"+
+			" o.max_servers, o.lockdown_mode, o.created_at, o.updated_at, o.pm_pinned_msg_id,"+
+			" o.schedule_time, o.schedule_once, o.lang"+
 			" FROM chats c JOIN owners o ON o.user_id = c.owner_id WHERE c.chat_id = ?", chatID)
 	o, err := scanOwner(row)
 	if err == sql.ErrNoRows {
@@ -973,6 +1032,52 @@ func (d *DB) GetAuditLog(ownerID int64, limit int) ([]*AuditEntry, error) {
 	rows, err := d.db.Query(
 		"SELECT id, owner_id, user_id, chat_id, server_id, action, details, created_at"+
 			" FROM audit_log WHERE owner_id = ? ORDER BY id DESC LIMIT ?", ownerID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*AuditEntry
+	for rows.Next() {
+		var e AuditEntry
+		if err := rows.Scan(&e.ID, &e.OwnerID, &e.UserID, &e.ChatID, &e.ServerID,
+			&e.Action, &e.Details, &e.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, &e)
+	}
+	return out, rows.Err()
+}
+
+// GetStartCount возвращает общее число запусков владельца (audit_log).
+func (d *DB) GetStartCount(ownerID int64) (int, error) {
+	var n int
+	err := d.db.QueryRow(
+		"SELECT COUNT(*) FROM audit_log WHERE owner_id = ? AND action = 'server_start'",
+		ownerID).Scan(&n)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	return n, err
+}
+
+// GetStartCountSince возвращает число запусков владельца с указанной даты.
+func (d *DB) GetStartCountSince(ownerID int64, since time.Time) (int, error) {
+	var n int
+	err := d.db.QueryRow(
+		"SELECT COUNT(*) FROM audit_log WHERE owner_id = ? AND action = 'server_start' AND created_at >= ?",
+		ownerID, since.UTC().Format("2006-01-02T15:04:05")).Scan(&n)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	return n, err
+}
+
+// GetRecentStarts возвращает последние запуски владельца (для /stats).
+func (d *DB) GetRecentStarts(ownerID int64, limit int) ([]*AuditEntry, error) {
+	rows, err := d.db.Query(
+		"SELECT id, owner_id, user_id, chat_id, server_id, action, details, created_at"+
+			" FROM audit_log WHERE owner_id = ? AND action = 'server_start'"+
+			" ORDER BY id DESC LIMIT ?", ownerID, limit)
 	if err != nil {
 		return nil, err
 	}

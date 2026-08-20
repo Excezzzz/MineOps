@@ -66,8 +66,15 @@ func main() {
 	if err != nil {
 		log.Printf("планировщик (сессии): %v", err)
 	}
+	// Расписание автозапуска: каждые 60 секунд проверяем совпадение времени.
+	_, err = s.Every(60).Seconds().Do(func() {
+		bot.CheckSchedule()
+	})
+	if err != nil {
+		log.Printf("планировщик (расписание): %v", err)
+	}
 	s.StartAsync()
-	log.Printf("планировщик запущен: дашборд %ds, сессии %ds", cfg.UpdateInterval, cfg.SessionCheck)
+	log.Printf("планировщик запущен: дашборд %ds, сессии %ds, расписание 60s", cfg.UpdateInterval, cfg.SessionCheck)
 
 	log.Printf("бот запущен (pid %d)", os.Getpid())
 	// Восстановить наблюдение за серверами, которые уже в очереди Aternos
