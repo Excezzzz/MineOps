@@ -5,6 +5,7 @@
 .env.example
 data/
 bin/
+!bin/mineops
 scripts/
 *.md
 LICENSE
